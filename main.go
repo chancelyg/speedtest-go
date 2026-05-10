@@ -70,6 +70,10 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	}
 	mux.Handle("/", http.FileServer(http.FS(sub)))
 
+	// favicon.ico: prefer a custom file placed next to the binary at runtime;
+	// fall back to the default icon embedded in static/favicon.ico.
+	mux.HandleFunc("/favicon.ico", faviconHandler(sub))
+
 	// API
 	mux.HandleFunc("/api/config", h.ConfigHandler)
 	mux.HandleFunc("/api/ip", h.IPHandler)
@@ -78,6 +82,22 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	mux.HandleFunc("/api/upload", h.UploadHandler)
 
 	return mux
+}
+
+// faviconHandler returns a handler that serves ./favicon.ico from the working
+// directory when it exists, and otherwise falls back to the embedded default.
+func faviconHandler(embedded fs.FS) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		const name = "favicon.ico"
+		if data, err := os.ReadFile(name); err == nil {
+			w.Header().Set("Content-Type", "image/x-icon")
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			w.Write(data) //nolint:errcheck
+			return
+		}
+		// Fall back to the embedded icon.
+		http.ServeFileFS(w, r, embedded, name)
+	}
 }
 
 // loggingMiddleware logs each request with method, path, remote addr,

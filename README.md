@@ -3,8 +3,7 @@
 > 单二进制文件部署的自托管网络测速站点，无外部依赖，零配置即可运行。
 
 <p align="center">
-  <img src="docs/preview-light.png" alt="Speedtest Light" width="49%" />
-  <img src="docs/preview-dark.png"  alt="Speedtest Dark"  width="49%" />
+  <img src="docs/preview.png" alt="Speedtest Preview" width="90%" />
 </p>
 
 <p align="center">
