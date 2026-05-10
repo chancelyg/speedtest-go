@@ -1,0 +1,379 @@
+/* ── CSS custom properties ───────────────────────────────────────────────── */
+:root {
+  --bg:           #f0f2f5;
+  --surface:      #ffffff;
+  --surface2:     #f7f8fa;
+  --border:       #e4e7ec;
+  --text:         #1a1d23;
+  --text-muted:   #6b7280;
+  --accent:       #3b82f6;
+  --accent-hover: #2563eb;
+  --bar-bg:       #e0e7ff;
+  --bar-fill:     #3b82f6;
+  --shadow:       0 1px 4px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+  --radius:       16px;
+  --transition:   .25s ease;
+}
+
+[data-theme="dark"] {
+  --bg:           #0f1117;
+  --surface:      #1c1f2b;
+  --surface2:     #252836;
+  --border:       #2e3347;
+  --text:         #e8eaf0;
+  --text-muted:   #8b92a5;
+  --accent:       #60a5fa;
+  --accent-hover: #93c5fd;
+  --bar-bg:       #1e2d4d;
+  --bar-fill:     #60a5fa;
+  --shadow:       0 1px 4px rgba(0,0,0,.3), 0 4px 24px rgba(0,0,0,.25);
+}
+
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition), color var(--transition);
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+.container {
+  width: 100%;
+  max-width: 580px;
+  padding: 24px 20px;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -.4px;
+}
+
+.controls { display: flex; gap: 8px; }
+
+.btn-secondary {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+.btn-secondary:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Card ────────────────────────────────────────────────────────────────── */
+main {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 36px 32px 28px;
+  box-shadow: var(--shadow);
+  transition: background var(--transition);
+}
+
+/* ── Speed display ───────────────────────────────────────────────────────── */
+.speed-display {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin-bottom: 32px;
+}
+
+.speed-divider {
+  width: 1px;
+  background: var(--border);
+  align-self: stretch;
+  margin: 0 28px;
+  flex-shrink: 0;
+}
+
+.speed-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.speed-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.speed-value {
+  font-size: 52px;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 2px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -2px;
+}
+
+.speed-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-bottom: 10px;
+}
+
+.speed-unit-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: .7;
+  font-variant-numeric: tabular-nums;
+}
+
+.speed-bar-wrap {
+  height: 4px;
+  background: var(--bar-bg);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.speed-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--bar-fill);
+  border-radius: 2px;
+  transition: width .15s linear;
+}
+
+/* ── Metrics grid ────────────────────────────────────────────────────────── */
+.metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.metric-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 11px 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: background var(--transition);
+}
+
+.metric-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.metric-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Configuration toggle trigger ─────────────────────────────────────── */
+.config-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 9px 14px;
+  margin-bottom: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition),
+              background var(--transition);
+  letter-spacing: .2px;
+}
+.config-toggle-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface2);
+}
+.config-toggle-btn[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--surface2);
+}
+.config-toggle-chevron {
+  font-size: 11px;
+  transition: transform var(--transition);
+  display: inline-block;
+}
+.config-toggle-btn[aria-expanded="true"] .config-toggle-chevron {
+  transform: rotate(180deg);
+}
+
+/* ── Configuration panel ───────────────────────────────────────────────── */
+.config-panel {
+  margin-bottom: 18px;
+  padding: 16px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: background var(--transition);
+}
+
+.config-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.config-row:last-child {
+  margin-bottom: 0;
+}
+
+.config-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+}
+
+.config-toggle {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.toggle-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.toggle-btn:not(.active):hover {
+  color: var(--accent);
+}
+
+.config-select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--transition);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+.config-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── Action buttons ──────────────────────────────────────────────────────── */
+.btn-row {
+  display: flex;
+  gap: 10px;
+}
+
+/* ── Start button ────────────────────────────────────────────────────────── */
+.btn-primary {
+  flex: 1;
+  padding: 15px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition), opacity var(--transition);
+  letter-spacing: .3px;
+}
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-primary:disabled { opacity: .55; cursor: not-allowed; }
+
+/* ── Stop button ─────────────────────────────────────────────────────────── */
+.btn-stop {
+  padding: 15px 22px;
+  background: transparent;
+  color: #ef4444;
+  border: 2px solid #ef4444;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition),
+              opacity var(--transition);
+  white-space: nowrap;
+  letter-spacing: .2px;
+}
+.btn-stop:hover { background: #ef4444; color: #fff; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+footer {
+  text-align: center;
+  margin-top: 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 460px) {
+  main { padding: 24px 18px 20px; }
+
+  .speed-value { font-size: 40px; }
+
+  .speed-divider { margin: 0 16px; }
+
+  .metrics { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Speedtest</title>
+  <script>
+    try {
+      var savedTheme = localStorage.getItem('speedtest_theme');
+      var dark = savedTheme ? savedTheme === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    } catch (_) {}
+  </script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1 id="title">网络测速</h1>
+      <div class="controls">
+        <button id="lang-toggle" class="btn-secondary">English</button>
+        <button id="theme-toggle" class="btn-secondary" aria-label="toggle theme">🌙</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- Download / Upload -->
+      <div class="speed-display">
+        <div class="speed-item">
+          <div class="speed-label" id="download-label">下载速度</div>
+          <div class="speed-value" id="download-speed">--</div>
+          <div class="speed-unit">Mbps &nbsp;<span class="speed-unit-sub" id="download-speed-mb"></span></div>
+          <div class="speed-bar-wrap"><div class="speed-bar" id="download-bar"></div></div>
+        </div>
+        <div class="speed-divider"></div>
+        <div class="speed-item">
+          <div class="speed-label" id="upload-label">上传速度</div>
+          <div class="speed-value" id="upload-speed">--</div>
+          <div class="speed-unit">Mbps &nbsp;<span class="speed-unit-sub" id="upload-speed-mb"></span></div>
+          <div class="speed-bar-wrap"><div class="speed-bar" id="upload-bar"></div></div>
+        </div>
+      </div>
+
+      <!-- Metrics grid -->
+      <div class="metrics">
+        <div class="metric-item">
+          <span class="metric-label" id="latency-label">延迟</span>
+          <span class="metric-value" id="latency">--</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label" id="jitter-label">抖动</span>
+          <span class="metric-value" id="jitter">--</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label" id="packet-loss-label">丢包率</span>
+          <span class="metric-value" id="packet-loss">--</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label" id="ip-label">IP 地址</span>
+          <span class="metric-value" id="ip-address">--</span>
+        </div>
+        <div class="metric-item">
+          <span class="metric-label" id="connection-label">连接方式</span>
+          <span class="metric-value" id="connection-type">--</span>
+        </div>
+      </div>
+
+      <!-- Configuration panel (collapsible) -->
+      <button class="config-toggle-btn" id="config-toggle" aria-expanded="false">
+        <span id="config-toggle-text">点击展开测试设置</span>
+        <span class="config-toggle-chevron" id="config-chevron">▾</span>
+      </button>
+      <div class="config-panel" id="config-panel" hidden>
+        <div class="config-row">
+          <div class="config-group">
+            <label class="config-label" id="mode-label">测速模式</label>
+            <div class="config-toggle" id="mode-toggle">
+              <button class="toggle-btn active" data-value="time" id="mode-time">按时长</button>
+              <button class="toggle-btn" data-value="size" id="mode-size">按大小</button>
+            </div>
+          </div>
+          <div class="config-group">
+            <label class="config-label" id="streams-label">并发流</label>
+            <select class="config-select" id="streams-select">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="4" selected>4</option>
+              <option value="8">8</option>
+              <option value="16">16</option>
+            </select>
+          </div>
+        </div>
+        <div class="config-row" id="time-config">
+          <div class="config-group">
+            <label class="config-label" id="duration-label">持续时间</label>
+            <select class="config-select" id="duration-select">
+              <option value="5">5 秒</option>
+              <option value="10">10 秒</option>
+              <option value="15" selected>15 秒</option>
+              <option value="30">30 秒</option>
+              <option value="60">60 秒</option>
+            </select>
+          </div>
+        </div>
+        <div class="config-row" id="size-config" style="display:none">
+          <div class="config-group">
+            <label class="config-label" id="download-size-label">下载大小</label>
+            <select class="config-select" id="download-size-select">
+              <option value="10">10 MB</option>
+              <option value="25" selected>25 MB</option>
+              <option value="50">50 MB</option>
+              <option value="100">100 MB</option>
+              <option value="500">500 MB</option>
+            </select>
+          </div>
+          <div class="config-group">
+            <label class="config-label" id="upload-size-label">上传大小</label>
+            <select class="config-select" id="upload-size-select">
+              <option value="5">5 MB</option>
+              <option value="10" selected>10 MB</option>
+              <option value="25">25 MB</option>
+              <option value="50">50 MB</option>
+              <option value="100">100 MB</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="btn-row">
+        <button id="start-btn" class="btn-primary">
+          <span id="start-text">开始测速</span>
+        </button>
+        <button id="stop-btn" class="btn-stop" hidden>
+          <span id="stop-text">停止</span>
+        </button>
+      </div>
+    </main>
+
+    <footer>
+      <p id="footer-text">Speedtest · Powered by Go</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
