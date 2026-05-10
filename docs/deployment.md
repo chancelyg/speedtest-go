@@ -16,8 +16,8 @@
 
 ```bash
 # 下载对应平台的二进制
-wget https://github.com/yourusername/speedtest-go/releases/download/v1.0.0/speedtest_1.0.0_linux_amd64.tar.gz
-tar -xzf speedtest_1.0.0_linux_amd64.tar.gz
+wget https://github.com/chancelyg/speedtest-go/releases/latest/download/speedtest_linux_amd64.tar.gz
+tar -xzf speedtest_linux_amd64.tar.gz
 
 # 运行
 ./speedtest

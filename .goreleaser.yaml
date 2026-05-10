@@ -36,6 +36,15 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
+release:
+  github:
+    owner: chancelyg
+    name: speedtest-go
+  # Automatically mark releases with pre-release suffixes
+  # (e.g. v0.0.1-alpha) as GitHub pre-releases.
+  prerelease: auto
+  name_template: '{{.ProjectName}} {{.Tag}}'
+
 changelog:
   sort: asc
   filters:
