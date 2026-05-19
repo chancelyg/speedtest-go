@@ -1,5 +1,7 @@
 'use strict';
 
+import { computeJitter } from './jitter.mjs';
+
 /* ── i18n ────────────────────────────────────────────────────────────────── */
 const i18n = {
   zh: {
@@ -293,12 +295,11 @@ async function measurePing(signal) {
 
   if (rtts.length === 0) return { latency: 0, jitter: 0, packetLoss: 100 };
 
-  const avg      = rtts.reduce((a, b) => a + b, 0) / rtts.length;
-  const variance = rtts.reduce((a, b) => a + (b - avg) ** 2, 0) / rtts.length;
+  const avg = rtts.reduce((a, b) => a + b, 0) / rtts.length;
 
   return {
     latency:    avg,
-    jitter:     Math.sqrt(variance),
+    jitter:     computeJitter(rtts),
     packetLoss: (failed / PING_COUNT) * 100,
   };
 }

@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -184,6 +185,59 @@ func TestDownloadHandlerNoCachingHeaders(t *testing.T) {
 
 	if cc := w.Result().Header.Get("Cache-Control"); cc != "no-store" {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+}
+
+// TestDownloadPayloadIsDeterministic verifies that successive download
+// responses return identical bytes — confirming the server reuses a single
+// pre-generated random buffer rather than re-randomizing per chunk. Per-chunk
+// crypto/rand makes the download CPU-bound on gigabit+ links and distorts
+// throughput measurement.
+func TestDownloadPayloadIsDeterministic(t *testing.T) {
+	h := handler.New(sizeCfg(1, 1))
+
+	fetch := func() []byte {
+		req := httptest.NewRequest(http.MethodGet, "/api/download?bytes=131072", nil)
+		w := httptest.NewRecorder()
+		h.DownloadHandler(w, req)
+		body, _ := io.ReadAll(w.Result().Body)
+		return body
+	}
+
+	first := fetch()
+	second := fetch()
+
+	if len(first) != 131072 || len(second) != 131072 {
+		t.Fatalf("body sizes = (%d, %d), want both 131072", len(first), len(second))
+	}
+	if !bytes.Equal(first, second) {
+		t.Error("two downloads returned different bytes — pre-generated random buffer is not being reused")
+	}
+}
+
+// TestDownloadPayloadIsHighEntropy guards against a regression where the
+// pre-generated buffer is left as all zeros (which would still be
+// incompressible-equivalent in this test but is wrong). A simple way to
+// detect "all zero" without false positives: count distinct byte values.
+func TestDownloadPayloadIsHighEntropy(t *testing.T) {
+	h := handler.New(sizeCfg(1, 1))
+	req := httptest.NewRequest(http.MethodGet, "/api/download?bytes=65536", nil)
+	w := httptest.NewRecorder()
+	h.DownloadHandler(w, req)
+	body, _ := io.ReadAll(w.Result().Body)
+
+	var seen [256]bool
+	distinct := 0
+	for _, b := range body {
+		if !seen[b] {
+			seen[b] = true
+			distinct++
+		}
+	}
+	// A genuinely random 64 KB buffer hits all 256 byte values with overwhelming
+	// probability. All-zero would yield distinct=1.
+	if distinct < 200 {
+		t.Errorf("download payload entropy too low: only %d distinct byte values (likely uninitialised)", distinct)
 	}
 }
 

@@ -24,15 +24,7 @@ func main() {
 	log.Printf("mode=%s  download=%dMB  upload=%dMB  duration=%v  streams=%d  maxConcurrent=%d  listen=%s",
 		cfg.Mode, cfg.DownloadMB, cfg.UploadMB, cfg.Duration, cfg.Streams, cfg.MaxConcurrent, cfg.Addr())
 
-	mux := buildMux(cfg)
-
-	srv := &http.Server{
-		Addr:         cfg.Addr(),
-		Handler:      loggingMiddleware(mux),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 0, // disabled: download/upload streams run longer than any fixed timeout
-		IdleTimeout:  120 * time.Second,
-	}
+	srv := newServer(cfg)
 
 	// Graceful shutdown: wait for SIGINT or SIGTERM, then drain in-flight
 	// connections with a 30-second deadline so ongoing speed-test streams
@@ -57,6 +49,27 @@ func main() {
 	}
 	<-idleConnsClosed
 	log.Println("server stopped")
+}
+
+// newServer constructs the speedtest HTTP server with timeouts tuned for
+// long-running download/upload streams.
+//
+//   - ReadHeaderTimeout protects against slow-header (slowloris) attacks.
+//   - ReadTimeout is intentionally disabled because size-mode uploads of
+//     multi-GB bodies can legitimately exceed any fixed deadline; body size
+//     is bounded by maxUploadBytes and time by maxDurationSecs in the handler.
+//   - WriteTimeout is intentionally disabled for the same reason on the
+//     response side (time-mode downloads stream for up to 5 minutes).
+//   - IdleTimeout reaps keep-alive connections between requests.
+func newServer(cfg *config.Config) *http.Server {
+	return &http.Server{
+		Addr:              cfg.Addr(),
+		Handler:           loggingMiddleware(buildMux(cfg)),
+		ReadHeaderTimeout: 30 * time.Second,
+		ReadTimeout:       0,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 func buildMux(cfg *config.Config) *http.ServeMux {

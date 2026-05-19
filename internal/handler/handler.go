@@ -13,7 +13,24 @@ import (
 	"speedtest-go/internal/config"
 )
 
-const chunkSize = 256 * 1024 // 256 KB per write
+// payloadSize is the size of the shared random buffer streamed for downloads.
+// 1 MB amortises syscall overhead vs. the previous 256 KB while keeping the
+// resident memory footprint trivial.
+const payloadSize = 1 << 20 // 1 MB
+
+// randomPayload is a single high-entropy buffer generated once at process
+// start and reused across every download response. Reuse is safe because the
+// payload need only be incompressible (so intermediate gzip-aware proxies do
+// not falsify throughput) — not unpredictable. Generating fresh randomness
+// per chunk made downloads CPU-bound on gigabit+ links.
+var randomPayload [payloadSize]byte
+
+func init() {
+	if _, err := rand.Read(randomPayload[:]); err != nil {
+		// init() runs at boot; refusing to start is preferable to serving zeros.
+		panic("speedtest: failed to seed download payload: " + err.Error())
+	}
+}
 
 // maxUploadBytes is the hard cap for a single upload request body (10 GB).
 // Combined with the concurrent-test semaphore this bounds total memory
@@ -137,8 +154,6 @@ func (h *Handler) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "no-store")
 
-	chunk := make([]byte, chunkSize)
-
 	// Allow frontend to override size per-request. `bytes` is used when the UI
 	// splits a size-mode test across multiple parallel streams.
 	// Cap at maxBytesPerStream (1 GB) to prevent abuse.
@@ -156,7 +171,7 @@ func (h *Handler) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	// If the client explicitly requested a specific byte count (size mode),
 	// honour it regardless of the server's default mode setting.
 	if r.URL.Query().Get("bytes") != "" || r.URL.Query().Get("size") != "" {
-		h.downloadBySize(w, chunk, totalBytes)
+		h.downloadBySize(w, totalBytes)
 		return
 	}
 
@@ -172,37 +187,35 @@ func (h *Handler) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch h.cfg.Mode {
 	case config.ModeTime:
-		h.downloadByTime(w, chunk, duration)
+		h.downloadByTime(w, duration)
 	default:
-		h.downloadBySize(w, chunk, totalBytes)
+		h.downloadBySize(w, totalBytes)
 	}
 }
 
-func (h *Handler) downloadBySize(w http.ResponseWriter, chunk []byte, total int) {
+func (h *Handler) downloadBySize(w http.ResponseWriter, total int) {
 	w.Header().Set("Content-Length", intStr(total))
 
 	written := 0
 	for written < total {
-		n := len(chunk)
+		n := len(randomPayload)
 		if written+n > total {
 			n = total - written
 		}
-		rand.Read(chunk[:n]) //nolint:errcheck
-		if _, err := w.Write(chunk[:n]); err != nil {
+		if _, err := w.Write(randomPayload[:n]); err != nil {
 			return
 		}
 		written += n
 	}
 }
 
-func (h *Handler) downloadByTime(w http.ResponseWriter, chunk []byte, duration time.Duration) {
+func (h *Handler) downloadByTime(w http.ResponseWriter, duration time.Duration) {
 	// No Content-Length: chunked transfer encoding until deadline.
 	deadline := time.Now().Add(duration)
 	flusher, canFlush := w.(http.Flusher)
 
 	for time.Now().Before(deadline) {
-		rand.Read(chunk) //nolint:errcheck
-		if _, err := w.Write(chunk); err != nil {
+		if _, err := w.Write(randomPayload[:]); err != nil {
 			return
 		}
 		if canFlush {
