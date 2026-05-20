@@ -17,6 +17,32 @@ import (
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+// countingDiscardWriter is a test ResponseWriter that discards the body but
+// records the byte count, status code, and headers. Used by time-mode
+// download tests because httptest.NewRecorder() buffers the entire body in
+// memory — and downloadByTime writes ~1 MB per loop iteration with no upper
+// bound on iterations, which exhausts CI runner memory (OOM → SIGTERM 143).
+type countingDiscardWriter struct {
+	header  http.Header
+	status  int
+	written int64
+}
+
+func newCountingWriter() *countingDiscardWriter {
+	return &countingDiscardWriter{header: http.Header{}, status: http.StatusOK}
+}
+
+func (c *countingDiscardWriter) Header() http.Header { return c.header }
+
+func (c *countingDiscardWriter) Write(p []byte) (int, error) {
+	c.written += int64(len(p))
+	return len(p), nil
+}
+
+func (c *countingDiscardWriter) WriteHeader(statusCode int) { c.status = statusCode }
+
+func (c *countingDiscardWriter) Flush() {}
+
 func sizeCfg(dlMB, ulMB int) *config.Config {
 	return &config.Config{
 		Mode:       config.ModeSize,
@@ -248,7 +274,7 @@ func TestDownloadHandlerTimeModeStreamsForDuration(t *testing.T) {
 	h := handler.New(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download", nil)
-	w := httptest.NewRecorder()
+	w := newCountingWriter()
 
 	start := time.Now()
 	h.DownloadHandler(w, req)
@@ -259,8 +285,7 @@ func TestDownloadHandlerTimeModeStreamsForDuration(t *testing.T) {
 		t.Errorf("time mode ran for %v, want ~2s", elapsed)
 	}
 
-	body, _ := io.ReadAll(w.Result().Body)
-	if len(body) == 0 {
+	if w.written == 0 {
 		t.Error("time mode body is empty")
 	}
 }
@@ -270,13 +295,12 @@ func TestDownloadHandlerTimeModeWritesData(t *testing.T) {
 	h := handler.New(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download", nil)
-	w := httptest.NewRecorder()
+	w := newCountingWriter()
 	h.DownloadHandler(w, req)
 
-	body, _ := io.ReadAll(w.Result().Body)
 	// At minimum, at least one chunk (256 KB) must have been written in 1 second
-	if len(body) < 256*1024 {
-		t.Errorf("time mode wrote only %d bytes in 1s, expected >= 256KB", len(body))
+	if w.written < 256*1024 {
+		t.Errorf("time mode wrote only %d bytes in 1s, expected >= 256KB", w.written)
 	}
 }
 
@@ -699,19 +723,19 @@ func TestDownloadDurationOverride(t *testing.T) {
 	h := handler.New(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download?duration=1", nil)
-	w := httptest.NewRecorder()
+	w := newCountingWriter()
 	start := time.Now()
 	h.DownloadHandler(w, req)
 	elapsed := time.Since(start)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
+	if w.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.status)
 	}
 	// Should have run for ~1 s, not 60 s.
 	if elapsed > 5*time.Second {
 		t.Errorf("elapsed = %v, expected ~1 s (duration override ignored)", elapsed)
 	}
-	if w.Body.Len() == 0 {
+	if w.written == 0 {
 		t.Error("expected non-empty body")
 	}
 }
@@ -724,7 +748,7 @@ func TestDownloadDurationOverrideTooLarge(t *testing.T) {
 
 	// 9999 > maxDurationSecs, should be ignored and server uses 1 s.
 	req := httptest.NewRequest(http.MethodGet, "/api/download?duration=9999", nil)
-	w := httptest.NewRecorder()
+	w := newCountingWriter()
 	start := time.Now()
 	h.DownloadHandler(w, req)
 	elapsed := time.Since(start)
@@ -741,7 +765,7 @@ func TestDownloadDurationOverrideZero(t *testing.T) {
 	h := handler.New(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download?duration=0", nil)
-	w := httptest.NewRecorder()
+	w := newCountingWriter()
 	start := time.Now()
 	h.DownloadHandler(w, req)
 	elapsed := time.Since(start)
