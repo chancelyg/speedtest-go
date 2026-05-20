@@ -1,6 +1,6 @@
 'use strict';
 
-import { computeJitter } from './jitter.mjs';
+import { gaugeAngle, windowStats, pushWindow, throughputMbps } from './metrics.mjs';
 
 /* ── i18n ────────────────────────────────────────────────────────────────── */
 const i18n = {
@@ -242,23 +242,39 @@ $('lang-toggle').addEventListener('click', () => {
 
 /* ── DOM helpers ─────────────────────────────────────────────────────────── */
 function setVal(id, text) { $(id).textContent = text; }
-function setBar(id, pct)  { $(id).style.width = Math.min(pct, 100) + '%'; }
 function setStage(key)    { $('start-text').textContent = t(key); }
+
+// Arc length of the semicircle (π × r = π × 80). Must match the SVG path.
+const ARC_LENGTH = Math.PI * 80;
 
 function setSpeed(prefix, mbps) {
   setVal(prefix + '-speed', mbps.toFixed(1));
   setVal(prefix + '-speed-mb', '(' + (mbps / 8).toFixed(1) + ' MB/s)');
-  setBar(prefix + '-bar', (mbps / MAX_MBPS) * 100);
+
+  const angle    = gaugeAngle(mbps);
+  // arc fill: dashoffset goes from full (empty) to 0 (full)
+  const offset   = ARC_LENGTH * (angle / 180);
+  // needle rotation: gaugeAngle=180 → −90° (left); 90° → 0 (up); 0° → +90° (right)
+  const rotation = 90 - angle;
+
+  $(prefix + '-fill').style.strokeDashoffset = String(offset);
+  $(prefix + '-needle').setAttribute(
+    'transform', `rotate(${rotation} 100 110)`
+  );
 }
 
-const MAX_MBPS = 1000;
+function resetGauges() {
+  ['download', 'upload'].forEach(prefix => {
+    setVal(prefix + '-speed', '--');
+    setVal(prefix + '-speed-mb', '');
+    $(prefix + '-fill').style.strokeDashoffset = String(ARC_LENGTH);
+    $(prefix + '-needle').setAttribute('transform', 'rotate(-90 100 110)');
+  });
+}
 
 function resetDisplay() {
-  ['download-speed', 'upload-speed'].forEach(id => setVal(id, '--'));
-  ['download-speed-mb', 'upload-speed-mb'].forEach(id => setVal(id, ''));
+  resetGauges();
   ['latency', 'jitter', 'packet-loss'].forEach(id => setVal(id, '--'));
-  setBar('download-bar', 0);
-  setBar('upload-bar', 0);
 }
 
 /* ── Stop mechanism ──────────────────────────────────────────────────────── */
@@ -275,33 +291,64 @@ $('stop-btn').addEventListener('click', () => {
 });
 
 /* ── Latency / Jitter / Packet-loss ─────────────────────────────────────── */
-const PING_COUNT = 20;
+// Rolling window of the last PING_WINDOW samples. Each ping appends a
+// { rtt, ok } record; UI metrics are recomputed from the window so that
+// latency/jitter/loss update continuously through the test — including
+// while download and upload phases are competing for bandwidth (which is
+// exactly when latency-under-load matters).
+const PING_WINDOW   = 20;
+const PING_INTERVAL = 250;
 
-async function measurePing(signal) {
-  const rtts = [];
-  let failed = 0;
-
-  for (let i = 0; i < PING_COUNT; i++) {
-    if (signal.aborted) break;
-    const t0 = performance.now();
-    try {
-      const r = await fetch('/api/ping?_=' + (Date.now() + i), { cache: 'no-store', signal });
-      if (!r.ok) throw new Error('ping failed');
-      rtts.push(performance.now() - t0);
-    } catch {
-      failed++;
-    }
+async function pingOnce(signal, seq) {
+  const t0 = performance.now();
+  try {
+    const r = await fetch('/api/ping?_=' + (Date.now() + seq), {
+      cache: 'no-store',
+      signal,
+    });
+    if (!r.ok) return { rtt: 0, ok: false };
+    return { rtt: performance.now() - t0, ok: true };
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    return { rtt: 0, ok: false };
   }
+}
 
-  if (rtts.length === 0) return { latency: 0, jitter: 0, packetLoss: 100 };
+function renderPingStats(samples) {
+  const { latency, jitter, packetLoss } = windowStats(samples);
+  setVal('latency',     latency.toFixed(1)    + ' ms');
+  setVal('jitter',      jitter.toFixed(1)     + ' ms');
+  setVal('packet-loss', packetLoss.toFixed(1) + ' %');
+}
 
-  const avg = rtts.reduce((a, b) => a + b, 0) / rtts.length;
+// Run a background ping loop until signal is aborted. Returns the final
+// window so callers can compute summary statistics.
+async function runPingLoop(signal) {
+  let samples = [];
+  let seq = 0;
 
-  return {
-    latency:    avg,
-    jitter:     computeJitter(rtts),
-    packetLoss: (failed / PING_COUNT) * 100,
-  };
+  while (!signal.aborted) {
+    try {
+      const sample = await pingOnce(signal, seq++);
+      samples = pushWindow(samples, sample, PING_WINDOW);
+      renderPingStats(samples);
+    } catch (e) {
+      if (e.name === 'AbortError') break;
+      throw e;
+    }
+    if (signal.aborted) break;
+    // Pace pings; abort during sleep should resolve promptly.
+    await new Promise(resolve => {
+      let timer;
+      const onAbort = () => { clearTimeout(timer); resolve(); };
+      timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, PING_INTERVAL);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+  return samples;
 }
 
 /* ── Download ────────────────────────────────────────────────────────────── */
@@ -338,17 +385,13 @@ async function measureDownload(signal) {
       const now = performance.now();
       if (now < measureStart) continue;     // warmup — discard
       totalReceived += value.byteLength;
-      const elapsed = (now - measureStart) / 1000;
-      if (elapsed > 0) {
-        setSpeed('download', (totalReceived * 8) / (elapsed * 1e6));
-      }
+      setSpeed('download', throughputMbps(totalReceived, now - measureStart));
     }
   };
 
   await Promise.all(Array.from({ length: streams }, (_, i) => streamTask(i)));
 
-  const elapsed = (performance.now() - measureStart) / 1000;
-  return elapsed > 0 ? (totalReceived * 8) / (elapsed * 1e6) : 0;
+  return throughputMbps(totalReceived, performance.now() - measureStart);
 }
 
 /* ── Upload ──────────────────────────────────────────────────────────────── */
@@ -363,21 +406,50 @@ const uploadChunk = (() => {
   return buf;
 })();
 
-function postBlob(blob, onProgress, signal) {
+// Upload a single blob. When `deadlineMs` is finite and reached before the
+// XHR completes, the request is aborted but the promise resolves cleanly —
+// the bytes already sent (counted via `progress` events) stay in the
+// running throughput total. This is the key fix that keeps time-mode tests
+// inside the configured duration on slow uplinks: a 1 MB chunk on a 256
+// Kbps link would otherwise force the loop to wait 30 s+ for a single
+// blob to finish before noticing the deadline.
+function postBlobUntil(blob, onProgress, signal, deadlineMs) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let endedByDeadline = false;
+    let externalAbort   = false;
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onUserAbort);
+    };
+
+    const onUserAbort = () => { externalAbort = true; xhr.abort(); };
+
     xhr.upload.addEventListener('progress', onProgress);
-    xhr.addEventListener('load', () => {
-      try { resolve(JSON.parse(xhr.responseText)); }
-      catch { resolve({}); }
+    xhr.addEventListener('load',  () => { cleanup(); resolve({ aborted: false }); });
+    xhr.addEventListener('abort', () => {
+      cleanup();
+      if (externalAbort)    reject(new DOMException('Aborted', 'AbortError'));
+      else if (endedByDeadline) resolve({ aborted: true });
+      else                  reject(new Error('upload XHR aborted unexpectedly'));
     });
-    xhr.addEventListener('error', () => reject(new Error('upload XHR error')));
+    xhr.addEventListener('error', () => {
+      cleanup();
+      if (endedByDeadline) resolve({ aborted: true });
+      else                 reject(new Error('upload XHR error'));
+    });
+
     xhr.open('POST', '/api/upload?_=' + Date.now() + Math.random());
 
-    // Honour AbortSignal for XHR (XHR has no native signal support; we poll).
-    if (signal) {
-      signal.addEventListener('abort', () => { xhr.abort(); reject(new DOMException('Aborted', 'AbortError')); });
-    }
+    const remaining = Number.isFinite(deadlineMs)
+      ? Math.max(0, deadlineMs - performance.now())
+      : Infinity;
+    const timer = Number.isFinite(remaining)
+      ? setTimeout(() => { endedByDeadline = true; xhr.abort(); }, remaining)
+      : 0;
+
+    if (signal) signal.addEventListener('abort', onUserAbort);
 
     xhr.send(blob);
   });
@@ -393,10 +465,7 @@ async function measureUpload(signal) {
   const onChunk = (delta, now) => {
     if (now < measureStart) return;
     totalSent += delta;
-    const elapsed = (now - measureStart) / 1000;
-    if (elapsed > 0) {
-      setSpeed('upload', (totalSent * 8) / (elapsed * 1e6));
-    }
+    setSpeed('upload', throughputMbps(totalSent, now - measureStart));
   };
 
   const workerSize = async () => {
@@ -407,11 +476,11 @@ async function measureUpload(signal) {
         : uploadChunk.subarray(0, remaining);
       remaining -= slice.byteLength;
       let lastLoaded = 0;
-      await postBlob(new Blob([slice]), e => {
+      await postBlobUntil(new Blob([slice]), e => {
         if (!e.lengthComputable) return;
         onChunk(e.loaded - lastLoaded, performance.now());
         lastLoaded = e.loaded;
-      }, signal);
+      }, signal, Infinity);
     }
   };
 
@@ -419,19 +488,19 @@ async function measureUpload(signal) {
     const deadline = t0 + activeCfg.durationSecs * 1000;
     while (performance.now() < deadline && !signal.aborted) {
       let lastLoaded = 0;
-      await postBlob(new Blob([uploadChunk]), e => {
+      const { aborted } = await postBlobUntil(new Blob([uploadChunk]), e => {
         if (!e.lengthComputable) return;
         onChunk(e.loaded - lastLoaded, performance.now());
         lastLoaded = e.loaded;
-      }, signal);
+      }, signal, deadline);
+      if (aborted) break;     // deadline reached mid-upload
     }
   };
 
   const worker = activeCfg.mode === 'time' ? workerTime : workerSize;
   await Promise.all(Array.from({ length: streams }, worker));
 
-  const elapsed = (performance.now() - measureStart) / 1000;
-  return elapsed > 0 ? (totalSent * 8) / (elapsed * 1e6) : 0;
+  return throughputMbps(totalSent, performance.now() - measureStart);
 }
 
 /* ── Orchestrate full test ───────────────────────────────────────────────── */
@@ -443,28 +512,35 @@ async function runTest() {
   abortCtrl = new AbortController();
   const { signal } = abortCtrl;
 
+  // Separate controller for the background ping loop so we can stop it
+  // independently from the user's "Stop" button (which aborts everything).
+  const pingCtrl = new AbortController();
+  const stopPing = () => pingCtrl.abort();
+  signal.addEventListener('abort', stopPing);
+
   const btn = $('start-btn');
   btn.disabled = true;
   showStopBtn(true);
   resetDisplay();
 
-  try {
-    // 1. Ping
-    setStage('stagePing');
-    const { latency, jitter, packetLoss } = await measurePing(signal);
-    if (!signal.aborted) {
-      setVal('latency',     latency.toFixed(1)    + ' ms');
-      setVal('jitter',      jitter.toFixed(1)     + ' ms');
-      setVal('packet-loss', packetLoss.toFixed(1) + ' %');
-    }
+  // Background ping loop — runs for the entire test so latency/jitter/loss
+  // update continuously (and capture latency-under-load when download or
+  // upload phases saturate the link).
+  const pingPromise = runPingLoop(pingCtrl.signal).catch(err => {
+    if (err.name !== 'AbortError') console.error('Ping loop error:', err);
+  });
 
-    // 2. Download
+  try {
+    setStage('stagePing');
+    // Warm up the ping window before kicking off throughput tests so the
+    // first metrics shown are based on real samples, not zeros.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
     if (!signal.aborted) {
       setStage('stageDown');
       await measureDownload(signal);
     }
 
-    // 3. Upload
     if (!signal.aborted) {
       setStage('stageUp');
       await measureUpload(signal);
@@ -473,6 +549,10 @@ async function runTest() {
   } catch (err) {
     if (err.name !== 'AbortError') console.error('Speedtest error:', err);
   } finally {
+    stopPing();
+    await pingPromise;
+    signal.removeEventListener('abort', stopPing);
+
     testing = false;
     btn.disabled = false;
     showStopBtn(false);

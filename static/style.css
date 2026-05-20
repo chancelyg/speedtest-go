@@ -10,6 +10,8 @@
   --accent-hover: #2563eb;
   --bar-bg:       #e0e7ff;
   --bar-fill:     #3b82f6;
+  --gauge-from:   #60a5fa;
+  --gauge-to:     #2563eb;
   --shadow:       0 1px 4px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
   --radius:       16px;
   --transition:   .25s ease;
@@ -26,6 +28,8 @@
   --accent-hover: #93c5fd;
   --bar-bg:       #1e2d4d;
   --bar-fill:     #60a5fa;
+  --gauge-from:   #3b82f6;
+  --gauge-to:     #93c5fd;
   --shadow:       0 1px 4px rgba(0,0,0,.3), 0 4px 24px rgba(0,0,0,.25);
 }
 
@@ -93,25 +97,19 @@ main {
   transition: background var(--transition);
 }
 
-/* ── Speed display ───────────────────────────────────────────────────────── */
+/* ── Speed display (gauges) ──────────────────────────────────────────────── */
 .speed-display {
-  display: flex;
-  align-items: flex-start;
-  gap: 0;
-  margin-bottom: 32px;
-}
-
-.speed-divider {
-  width: 1px;
-  background: var(--border);
-  align-self: stretch;
-  margin: 0 28px;
-  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
 }
 
 .speed-item {
-  flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .speed-label {
@@ -120,24 +118,8 @@ main {
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.speed-value {
-  font-size: 52px;
-  font-weight: 800;
-  color: var(--accent);
-  line-height: 1;
-  margin-bottom: 2px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -2px;
-}
-
-.speed-unit {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-weight: 500;
-  margin-bottom: 10px;
+  margin-bottom: 4px;
+  align-self: flex-start;
 }
 
 .speed-unit-sub {
@@ -145,21 +127,86 @@ main {
   color: var(--text-muted);
   opacity: .7;
   font-variant-numeric: tabular-nums;
+  display: block;
+  margin-top: 2px;
 }
 
-.speed-bar-wrap {
-  height: 4px;
-  background: var(--bar-bg);
-  border-radius: 2px;
-  overflow: hidden;
+/* ── Gauge ───────────────────────────────────────────────────────────────── */
+.gauge {
+  width: 100%;
+  max-width: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-.speed-bar {
-  height: 100%;
-  width: 0%;
-  background: var(--bar-fill);
-  border-radius: 2px;
-  transition: width .15s linear;
+.gauge-svg {
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.gauge-track {
+  fill: none;
+  stroke: var(--bar-bg);
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+
+.gauge-fill {
+  fill: none;
+  stroke-width: 10;
+  stroke-linecap: round;
+  /* Arc length = π × 80 ≈ 251.33. Start fully empty. */
+  stroke-dasharray: 251.33;
+  stroke-dashoffset: 251.33;
+  transition: stroke-dashoffset .25s ease-out;
+}
+
+.gauge-stop-from { stop-color: var(--gauge-from); }
+.gauge-stop-to   { stop-color: var(--gauge-to);   }
+
+.gauge-needle {
+  stroke: var(--text);
+  stroke-width: 2;
+  stroke-linecap: round;
+  transform-origin: 100px 110px;
+  transition: transform .25s ease-out;
+}
+
+.gauge-pivot {
+  fill: var(--text);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.gauge-tick {
+  fill: var(--text-muted);
+  font-size: 8px;
+  font-weight: 500;
+  text-anchor: middle;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+/* SVG text variants (gauge-value / gauge-unit are <text> inside <svg>). */
+.gauge-value {
+  fill: var(--accent);
+  font-size: 26px;
+  font-weight: 800;
+  text-anchor: middle;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -1px;
+}
+
+.gauge-unit {
+  fill: var(--text-muted);
+  font-size: 9px;
+  font-weight: 500;
+  text-anchor: middle;
+  letter-spacing: 1px;
+  font-family: inherit;
 }
 
 /* ── Metrics grid ────────────────────────────────────────────────────────── */
@@ -371,9 +418,9 @@ footer {
 @media (max-width: 460px) {
   main { padding: 24px 18px 20px; }
 
-  .speed-value { font-size: 40px; }
+  .speed-display { grid-template-columns: 1fr; gap: 8px; }
 
-  .speed-divider { margin: 0 16px; }
+  .gauge-value { font-size: 26px; }
 
   .metrics { grid-template-columns: 1fr; }
 }

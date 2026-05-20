@@ -25,20 +25,69 @@
     </header>
 
     <main>
-      <!-- Download / Upload -->
+      <!-- Download / Upload gauges -->
       <div class="speed-display">
         <div class="speed-item">
           <div class="speed-label" id="download-label">下载速度</div>
-          <div class="speed-value" id="download-speed">--</div>
-          <div class="speed-unit">Mbps &nbsp;<span class="speed-unit-sub" id="download-speed-mb"></span></div>
-          <div class="speed-bar-wrap"><div class="speed-bar" id="download-bar"></div></div>
+          <div class="gauge" data-prefix="download">
+            <svg class="gauge-svg" viewBox="0 0 200 150" aria-hidden="true">
+              <defs>
+                <linearGradient id="downloadGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%"   class="gauge-stop-from" />
+                  <stop offset="100%" class="gauge-stop-to" />
+                </linearGradient>
+              </defs>
+              <path class="gauge-track" d="M 20 110 A 80 80 0 0 1 180 110" />
+              <path class="gauge-fill" id="download-fill"
+                    d="M 20 110 A 80 80 0 0 1 180 110"
+                    stroke="url(#downloadGradient)" />
+              <g class="gauge-ticks" aria-hidden="true">
+                <text x="10"  y="126" class="gauge-tick">0.1</text>
+                <text x="38"  y="50"  class="gauge-tick">1</text>
+                <text x="100" y="14"  class="gauge-tick">10</text>
+                <text x="162" y="50"  class="gauge-tick">100</text>
+                <text x="190" y="126" class="gauge-tick">1k</text>
+              </g>
+              <line class="gauge-needle" id="download-needle"
+                    x1="100" y1="110" x2="100" y2="55"
+                    transform="rotate(-90 100 110)" />
+              <circle class="gauge-pivot" cx="100" cy="110" r="5" />
+              <text x="100" y="92" class="gauge-value" id="download-speed">--</text>
+              <text x="100" y="145" class="gauge-unit">Mbps</text>
+            </svg>
+            <div class="speed-unit-sub" id="download-speed-mb"></div>
+          </div>
         </div>
-        <div class="speed-divider"></div>
         <div class="speed-item">
           <div class="speed-label" id="upload-label">上传速度</div>
-          <div class="speed-value" id="upload-speed">--</div>
-          <div class="speed-unit">Mbps &nbsp;<span class="speed-unit-sub" id="upload-speed-mb"></span></div>
-          <div class="speed-bar-wrap"><div class="speed-bar" id="upload-bar"></div></div>
+          <div class="gauge" data-prefix="upload">
+            <svg class="gauge-svg" viewBox="0 0 200 150" aria-hidden="true">
+              <defs>
+                <linearGradient id="uploadGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%"   class="gauge-stop-from" />
+                  <stop offset="100%" class="gauge-stop-to" />
+                </linearGradient>
+              </defs>
+              <path class="gauge-track" d="M 20 110 A 80 80 0 0 1 180 110" />
+              <path class="gauge-fill" id="upload-fill"
+                    d="M 20 110 A 80 80 0 0 1 180 110"
+                    stroke="url(#uploadGradient)" />
+              <g class="gauge-ticks" aria-hidden="true">
+                <text x="10"  y="126" class="gauge-tick">0.1</text>
+                <text x="38"  y="50"  class="gauge-tick">1</text>
+                <text x="100" y="14"  class="gauge-tick">10</text>
+                <text x="162" y="50"  class="gauge-tick">100</text>
+                <text x="190" y="126" class="gauge-tick">1k</text>
+              </g>
+              <line class="gauge-needle" id="upload-needle"
+                    x1="100" y1="110" x2="100" y2="55"
+                    transform="rotate(-90 100 110)" />
+              <circle class="gauge-pivot" cx="100" cy="110" r="5" />
+              <text x="100" y="92" class="gauge-value" id="upload-speed">--</text>
+              <text x="100" y="145" class="gauge-unit">Mbps</text>
+            </svg>
+            <div class="speed-unit-sub" id="upload-speed-mb"></div>
+          </div>
         </div>
       </div>
 
