@@ -1,0 +1,61 @@
+# golangci-lint configuration for speedtest-go.
+#
+# Philosophy: keep the linter set small but high-signal. This project ships as
+# a single binary with no external runtime dependencies (see SPEC.md), so the
+# emphasis is on correctness, dead code removal, and security hygiene rather
+# than stylistic enforcement.
+
+run:
+  # 5 minutes is plenty for this small codebase but leaves headroom for
+  # cold caches on CI runners.
+  timeout: 5m
+  # Pin the Go language version to match go.mod so the analyzers use the
+  # correct stdlib + language feature set.
+  go: "1.24"
+
+linters:
+  disable-all: true
+  enable:
+    # errcheck: catches unchecked error returns. Critical for a network
+    # service where ignoring io.Writer.Write or Close() errors silently
+    # corrupts measurements.
+    - errcheck
+    # gosimple: flags code that can be simplified — useful for keeping the
+    # handler / config layers idiomatic and readable.
+    - gosimple
+    # govet: standard Go vet checks (printf, shadow, atomic alignment, etc.).
+    # Same checks the `go vet` CI step runs, but integrated with the linter.
+    - govet
+    # ineffassign: flags assignments whose value is never used — often a
+    # symptom of a forgotten error-handling branch.
+    - ineffassign
+    # staticcheck: deep correctness checks (SA-series). High signal, low
+    # noise; catches real bugs the compiler doesn't.
+    - staticcheck
+    # unused: detects unused constants, variables, functions, and types.
+    # Helps keep the binary lean and removes ambiguity for future readers.
+    - unused
+    # gosec: security-focused checks. Important here because the handler
+    # exposes public endpoints; catches things like weak crypto, unsafe
+    # file paths, and unbounded io.Copy.
+    - gosec
+
+issues:
+  # Don't cap reported issues per linter / per file.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Tests legitimately use math/rand for fixture data — G404 (weak RNG)
+    # is a false positive in that context. We do NOT want crypto/rand in
+    # test code; it's slower and unnecessary.
+    - path: _test.go
+      linters:
+        - gosec
+      text: "G404"
+
+    # Tests often ignore errors from cleanup helpers (e.g. resp.Body.Close
+    # inside a defer) where the failure mode is irrelevant to the assertion.
+    - path: _test.go
+      linters:
+        - errcheck

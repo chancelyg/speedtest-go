@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (race + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Pinning to go.mod keeps the CI toolchain in lockstep with the
+          # project's declared Go version; bumping go.mod automatically bumps CI.
+          go-version-file: go.mod
+          # setup-go's built-in cache covers GOMODCACHE + the build cache,
+          # so no separate actions/cache step is needed.
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test (race + coverage)
+        # -race: data-race detector (the handler uses goroutines + a semaphore)
+        # -count=1: disable test caching, same as the release workflow
+        # -covermode=atomic: required when -race is enabled
+        run: go test ./... -race -count=1 -coverprofile=cover.out -covermode=atomic
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: cover.out
+          retention-days: 14
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          # Using `latest` so we always get the newest stable linter set without
+          # manual bumps. If lint output becomes noisy from upstream changes,
+          # pin to a specific version (e.g. v1.62.2) and update intentionally.
+          version: latest
