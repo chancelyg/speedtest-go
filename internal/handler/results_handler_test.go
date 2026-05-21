@@ -90,7 +90,6 @@ func TestResultsAllReturn503WhenStoreNil(t *testing.T) {
 		{"create", http.MethodPost, "/api/results", h.ResultsListOrCreate},
 		{"deleteAll", http.MethodDelete, "/api/results", h.ResultsListOrCreate},
 		{"byId", http.MethodDelete, "/api/results/1", h.ResultsByID},
-		{"range", http.MethodGet, "/api/results/range", h.ResultsRange},
 		{"export", http.MethodGet, "/api/results/export", h.ResultsExport},
 	}
 	for _, tc := range cases {
@@ -235,59 +234,6 @@ func TestListLimitAndOffsetClamping(t *testing.T) {
 	}
 }
 
-// ── GET /api/results/range ───────────────────────────────────────────────────
-
-func TestRangeFilters(t *testing.T) {
-	h, s := newHandlerWithStore(t)
-	rows := seed(t, s, 5) // ts = base, base+1000, ..., base+4000
-
-	from := rows[1].CreatedAt
-	to := rows[3].CreatedAt
-	url := fmt.Sprintf("/api/results/range?from=%d&to=%d", from, to)
-	req := httptest.NewRequest(http.MethodGet, url, nil)
-	w := httptest.NewRecorder()
-	h.ResultsRange(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-
-	var body struct {
-		Results []store.Result `json:"results"`
-	}
-	_ = json.NewDecoder(w.Body).Decode(&body)
-	if len(body.Results) != 3 {
-		t.Errorf("len = %d, want 3", len(body.Results))
-	}
-}
-
-func TestRangeInvalidParams(t *testing.T) {
-	h, _ := newHandlerWithStore(t)
-	cases := []string{
-		"?from=abc",
-		"?from=100&to=xyz",
-	}
-	for _, q := range cases {
-		t.Run(q, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/results/range"+q, nil)
-			w := httptest.NewRecorder()
-			h.ResultsRange(w, req)
-			if w.Code != http.StatusBadRequest {
-				t.Errorf("status = %d, want 400", w.Code)
-			}
-		})
-	}
-}
-
-func TestRangeRejectsNonGET(t *testing.T) {
-	h, _ := newHandlerWithStore(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/results/range", nil)
-	w := httptest.NewRecorder()
-	h.ResultsRange(w, req)
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status = %d, want 405", w.Code)
-	}
-}
-
 // ── GET /api/results/export ─────────────────────────────────────────────────
 
 func TestExportJSON(t *testing.T) {
@@ -346,28 +292,6 @@ func TestExportCSV(t *testing.T) {
 	}
 	if rows[0][0] != "id" {
 		t.Errorf("first header = %q, want id", rows[0][0])
-	}
-}
-
-func TestExportRangeWindow(t *testing.T) {
-	h, s := newHandlerWithStore(t)
-	rows := seed(t, s, 5)
-
-	url := fmt.Sprintf("/api/results/export?format=json&from=%d&to=%d",
-		rows[1].CreatedAt, rows[2].CreatedAt)
-	req := httptest.NewRequest(http.MethodGet, url, nil)
-	w := httptest.NewRecorder()
-	h.ResultsExport(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	var body struct {
-		Results []store.Result `json:"results"`
-	}
-	_ = json.NewDecoder(w.Body).Decode(&body)
-	if len(body.Results) != 2 {
-		t.Errorf("len = %d, want 2", len(body.Results))
 	}
 }
 
@@ -459,10 +383,10 @@ func TestResultsByIDRejectsNonDelete(t *testing.T) {
 }
 
 func TestResultsByIDIgnoresKnownSubpaths(t *testing.T) {
-	// /api/results/range and /api/results/export must NOT be treated as
-	// {id} = "range" / "export" when ResultsByID is invoked accidentally.
+	// /api/results/export must NOT be treated as {id} = "export" when
+	// ResultsByID is invoked accidentally.
 	h, _ := newHandlerWithStore(t)
-	for _, p := range []string{"/api/results/range", "/api/results/export"} {
+	for _, p := range []string{"/api/results/export"} {
 		t.Run(p, func(t *testing.T) {
 			req := withLoopback(httptest.NewRequest(http.MethodDelete, p, nil))
 			w := httptest.NewRecorder()

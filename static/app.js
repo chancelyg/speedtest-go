@@ -4,12 +4,8 @@ import { gaugeAngle, windowStats, pushWindow, throughputMbps, jitterRFC3550 } fr
 import { mountToast } from './toast.mjs';
 
 // === [Phase 2-3 module imports] ===
-// Skeleton imports — real implementations land via agents F1/F2/F3. Each
-// returns a no-op instance until its owner ships, so app.js can wire the
-// mount points now without breaking the build.
-import { renderChart } from './chart.mjs';   // F2: real-time speed-over-time
-import { mountHistory } from './history.mjs'; // F3: history drawer
-import { mountTrends }  from './trends.mjs';  // F3: trends panel
+import { renderChart } from './chart.mjs';    // F2: real-time speed-over-time
+import { mountHistory } from './history.mjs'; // F3: paginated history drawer
 
 /* ── i18n ────────────────────────────────────────────────────────────────── */
 const i18n = {
@@ -281,9 +277,8 @@ $('lang-toggle').addEventListener('click', () => {
   lang = lang === 'zh' ? 'en' : 'zh';
   try { localStorage.setItem('speedtest_lang', lang); } catch { /* ignore */ }
   applyLang();
-  // === [F3: propagate lang to history + trends panels] ===
+  // === [F3: propagate lang to history panel] ===
   try { window.__historyPanel?.setLang(lang); } catch { /* defensive — panel may not be mounted */ }
-  try { window.__trendsPanel?.setLang(lang);  } catch { /* defensive — panel may not be mounted */ }
   // === [F3 end] ===
 });
 
@@ -933,7 +928,6 @@ async function runTest() {
           console.warn('persist result: server returned', r.status);
         }
         window.__historyPanel?.refresh().catch(() => {});
-        window.__trendsPanel?.refresh().catch(() => {});
       } catch (err) {
         if (err && err.name !== 'AbortError') {
           console.error('persist result failed', err);
@@ -1019,24 +1013,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   // === [F2 end] ===
 
-  // === [F3: mount history drawer + trends panel] ===
+  // === [F3: mount history drawer] ===
   // Gated on the server-side feature flag (`historyEnabled` from /api/config).
-  // When disabled both panels stay hidden — preserves the zero-config /
+  // When disabled the panel stays hidden — preserves the zero-config /
   // no-DB single-binary deployment story.
   if (srvCfg?.historyEnabled) {
     const historyEl = $('history-drawer');
-    const trendsEl  = $('trends-panel');
     if (historyEl) {
       historyEl.hidden = false;
-      const hist = mountHistory(historyEl, { apiBase: '/api/results', limit: 20, lang });
       // Stash on window so runTest's [F3: persist result] block can call
       // refresh() without re-importing or threading through closures.
-      window.__historyPanel = hist;
-    }
-    if (trendsEl) {
-      trendsEl.hidden = false;
-      const trends = mountTrends(trendsEl, { apiBase: '/api/results', lang });
-      window.__trendsPanel = trends;
+      window.__historyPanel = mountHistory(historyEl, { apiBase: '/api/results', pageSize: 20, lang });
     }
   }
   // === [F3 end] ===

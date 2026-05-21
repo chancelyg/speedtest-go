@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -170,7 +169,7 @@ func (h *Handler) ResultsByID(w http.ResponseWriter, r *http.Request) {
 	// keeps the surface stable if the mux pattern set changes.
 	rest := strings.TrimPrefix(r.URL.Path, "/api/results/")
 	switch rest {
-	case "", "range", "export":
+	case "", "export":
 		http.NotFound(w, r)
 		return
 	}
@@ -200,34 +199,10 @@ func (h *Handler) ResultsByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"deleted": id})
 }
 
-// ResultsRange serves GET /api/results/range?from=<unixMs>&to=<unixMs>.
-func (h *Handler) ResultsRange(w http.ResponseWriter, r *http.Request) {
-	if h.store == nil {
-		writeHistoryDisabled(w)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	from, to, err := parseRange(r)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	results, err := h.store.Range(r.Context(), from, to)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"results": results, "from": from, "to": to})
-}
-
-// ResultsExport serves GET /api/results/export?format=csv|json&from=&to=.
+// ResultsExport serves GET /api/results/export?format=csv|json.
 //
-// When from/to are absent the full table is exported. The Content-Disposition
-// header carries a UTC-timestamped filename so curl/browser downloads land
-// with a useful name.
+// Always exports the full table. Content-Disposition header carries a
+// UTC-timestamped filename so curl/browser downloads land with a useful name.
 func (h *Handler) ResultsExport(w http.ResponseWriter, r *http.Request) {
 	if h.store == nil {
 		writeHistoryDisabled(w)
@@ -247,7 +222,10 @@ func (h *Handler) ResultsExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := exportSet(r, h.store)
+	// Cap at 100k rows: an enormous local history but still bounded. Single-
+	// machine deployment is the target audience; nobody is exporting > 100k
+	// speed tests through the browser.
+	results, err := h.store.List(r.Context(), 100_000, 0)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -265,24 +243,6 @@ func (h *Handler) ResultsExport(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		writeResultsCSV(w, results)
 	}
-}
-
-// exportSet decides between a time-window Range query and an unfiltered
-// full-table dump. A missing from/to means "everything"; we use List with the
-// max limit to avoid loading the entire table when from/to are absent and the
-// table is huge. The export semantics intentionally cap at maxListLimit when
-// no range is supplied — callers that need more should narrow the window.
-func exportSet(r *http.Request, s store.Store) ([]store.Result, error) {
-	fromStr := r.URL.Query().Get("from")
-	toStr := r.URL.Query().Get("to")
-	if fromStr != "" || toStr != "" {
-		from, to, err := parseRange(r)
-		if err != nil {
-			return nil, err
-		}
-		return s.Range(r.Context(), from, to)
-	}
-	return s.List(r.Context(), maxListLimit, 0)
 }
 
 // writeResultsCSV writes a CSV header + one row per result.
@@ -313,32 +273,6 @@ func writeResultsCSV(w http.ResponseWriter, results []store.Result) {
 			r.SettingsJSON,
 		})
 	}
-}
-
-// parseRange extracts the unix-ms `from` and `to` query parameters and
-// validates them. Both default to "0" if absent; callers wanting "everything"
-// should not call this helper and should fall back to a List() call.
-func parseRange(r *http.Request) (int64, int64, error) {
-	fromStr := r.URL.Query().Get("from")
-	toStr := r.URL.Query().Get("to")
-	var from, to int64
-	if fromStr != "" {
-		v, err := strconv.ParseInt(fromStr, 10, 64)
-		if err != nil {
-			return 0, 0, errors.New("invalid from")
-		}
-		from = v
-	}
-	if toStr != "" {
-		v, err := strconv.ParseInt(toStr, 10, 64)
-		if err != nil {
-			return 0, 0, errors.New("invalid to")
-		}
-		to = v
-	} else {
-		to = time.Now().UnixMilli()
-	}
-	return from, to, nil
 }
 
 // parseQueryInt parses an int from r.URL.Query()[key], returning def when

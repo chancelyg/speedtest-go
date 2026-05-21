@@ -1,61 +1,95 @@
 // Run with: node --test static/history.test.mjs
-//
-// Tests the public shape of mountHistory.  DOM rendering is exercised in
-// the browser; here we only verify the contract so that app.js can rely
-// on it without integration testing.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mountHistory } from './history.mjs';
+import { mountHistory, computePageWindow } from './history.mjs';
+
+/* ── computePageWindow (pure) ──────────────────────────────────────────── */
+
+test('computePageWindow: 1 page -> [1]', () => {
+  assert.deepEqual(computePageWindow(1, 1), [1]);
+});
+
+test('computePageWindow: <=7 pages render fully without ellipsis', () => {
+  assert.deepEqual(computePageWindow(7, 1), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(computePageWindow(5, 3), [1, 2, 3, 4, 5]);
+});
+
+test('computePageWindow: clamps currentPage to valid range', () => {
+  assert.deepEqual(computePageWindow(5, 99), [1, 2, 3, 4, 5]);
+  assert.deepEqual(computePageWindow(5, -1), [1, 2, 3, 4, 5]);
+  assert.deepEqual(computePageWindow(5, 0),  [1, 2, 3, 4, 5]);
+});
+
+test('computePageWindow: ellipsis on the right when current is near the start', () => {
+  // total=20, current=1 → [1, 2, 3, …, 20]
+  assert.deepEqual(computePageWindow(20, 1), [1, 2, 3, '…', 20]);
+});
+
+test('computePageWindow: ellipsis on the left when current is near the end', () => {
+  // total=20, current=20 → [1, …, 18, 19, 20]
+  assert.deepEqual(computePageWindow(20, 20), [1, '…', 18, 19, 20]);
+});
+
+test('computePageWindow: ellipsis on both sides for middle pages', () => {
+  // total=20, current=10, window=2 → [1, …, 8, 9, 10, 11, 12, …, 20]
+  assert.deepEqual(computePageWindow(20, 10), [1, '…', 8, 9, 10, 11, 12, '…', 20]);
+});
+
+test('computePageWindow: windowSize=0 reduces to just the current page', () => {
+  // [1, …, 10, …, 20]
+  assert.deepEqual(computePageWindow(20, 10, 0), [1, '…', 10, '…', 20]);
+});
+
+test('computePageWindow: non-numeric inputs degrade to safe defaults', () => {
+  assert.deepEqual(computePageWindow('foo', 'bar'), [1]);
+  assert.deepEqual(computePageWindow(null, undefined), [1]);
+});
+
+/* ── mountHistory contract ─────────────────────────────────────────────── */
 
 test('mountHistory: returns an instance with the documented methods', () => {
   const stub = makeStubContainer();
-  const inst = mountHistory(stub, { apiBase: '/api/results', limit: 20, lang: 'zh' });
-  assert.equal(typeof inst.refresh, 'function');
-  assert.equal(typeof inst.setLang, 'function');
+  const inst = mountHistory(stub, { apiBase: '/api/results', pageSize: 20, lang: 'zh' });
+  assert.equal(typeof inst.refresh,  'function');
+  assert.equal(typeof inst.setLang,  'function');
+  assert.equal(typeof inst.goToPage, 'function');
 });
 
 test('mountHistory: refresh() returns a promise even on a stub container', () => {
-  // It might reject (no fetch), but it must be thenable. We don't await it —
-  // we only assert it conforms to the JSDoc Promise<void> shape.
   const stub = makeStubContainer();
   const inst = mountHistory(stub, { apiBase: '/api/results' });
   const p = inst.refresh();
   assert.ok(p && typeof p.then === 'function', 'refresh() must return a Promise');
-  // Swallow any rejection from the missing-fetch environment.
   p.catch(() => {});
 });
 
-test('mountHistory: setLang accepts string without throwing', () => {
+test('mountHistory: setLang and goToPage do not throw on the stub', () => {
   const stub = makeStubContainer();
   const inst = mountHistory(stub, { apiBase: '/api/results' });
   assert.doesNotThrow(() => inst.setLang('en'));
   assert.doesNotThrow(() => inst.setLang('zh'));
+  assert.doesNotThrow(() => { inst.goToPage(2).catch(() => {}); });
 });
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
 
 function makeStubContainer() {
-  const el = {
+  return {
     children: [],
     attributes: {},
-    innerHTML: '',
-    textContent: '',
     setAttribute(k, v) { this.attributes[k] = v; },
     getAttribute(k) { return this.attributes[k]; },
-    appendChild(child) { this.children.push(child); return child; },
-    removeChild(child) {
-      this.children = this.children.filter(c => c !== child);
-      return child;
+    appendChild(c) { this.children.push(c); return c; },
+    removeChild(c) {
+      this.children = this.children.filter(x => x !== c);
+      return c;
     },
     addEventListener() {},
     removeEventListener() {},
-    querySelector() { return null; },
-    querySelectorAll() { return []; },
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     style: {},
     dataset: {},
     hidden: false,
   };
-  return el;
 }

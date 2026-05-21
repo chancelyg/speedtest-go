@@ -165,12 +165,9 @@ func buildMux(cfg *config.Config, s store.Store) *http.ServeMux {
 	// Health probe — always wired; respects history availability.
 	mux.HandleFunc("/healthz", h.HealthHandler)
 
-	// Results history. Order matters: more-specific paths must be registered
-	// before /api/results/ which would otherwise eat them. Go's ServeMux
-	// picks the longest matching pattern, so explicit /api/results/range and
-	// /api/results/export win over /api/results/ — but we register them
-	// first as a defense in depth.
-	mux.HandleFunc("/api/results/range", h.ResultsRange)
+	// Results history. Order matters: /api/results/export must be registered
+	// before /api/results/ which would otherwise eat it. Go's ServeMux picks
+	// the longest matching pattern, so the explicit path wins.
 	mux.HandleFunc("/api/results/export", h.ResultsExport)
 	mux.HandleFunc("/api/results", h.ResultsListOrCreate)
 	mux.HandleFunc("/api/results/", h.ResultsByID)

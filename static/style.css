@@ -913,71 +913,13 @@ body {
   letter-spacing: 0.02em;
 }
 
-/* ── [F3] Trends card ────────────────────────────────────────────────── */
-
-.trends-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-card);
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  animation: fadeUp 280ms 220ms ease-out both;
-}
-
-.trends-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.trends-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-  margin-right: auto;
-}
-
-.trends-window-toggle {
-  display: inline-flex;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-  gap: 2px;
-}
-
-.trends-window-btn {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  font-family: inherit;
-  transition: color var(--transition), background var(--transition);
-}
-.trends-window-btn:hover {
-  color: var(--text);
-}
-.trends-window-btn.active {
-  background: var(--accent);
-  color: #fff;
-}
-
-.trends-export {
+/* Export actions in the history card header (CSV / JSON download buttons). */
+.history-export {
   display: inline-flex;
   gap: 6px;
 }
 
-.trends-export-btn {
+.history-export-btn {
   appearance: none;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -990,66 +932,64 @@ body {
   font-family: inherit;
   transition: border-color var(--transition), background var(--transition), color var(--transition);
 }
-.trends-export-btn:hover {
+.history-export-btn:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
 }
 
-.trends-chart-block {
+/* Pagination row at the bottom of the history card. */
+.history-pager {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
 }
 
-.trends-chart-caption {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.history-pager-info {
+  margin-right: auto;
+  font-size: 12px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-.trends-chart {
-  width: 100%;
-  height: 140px;
-  display: block;
+.history-page-btn {
+  appearance: none;
   background: var(--surface-2);
   border: 1px solid var(--border);
+  color: var(--text);
+  min-width: 34px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
   border-radius: var(--radius-sm);
-  overflow: hidden;
+  cursor: pointer;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+.history-page-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.history-page-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.history-page-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-.trends-axis {
-  stroke: var(--border-strong);
-  stroke-width: 1;
-}
-
-.trends-line {
-  stroke-width: 2;
-}
-
-.trends-line-dl  { stroke: var(--download-to); }
-.trends-line-ul  { stroke: var(--upload-to);   }
-.trends-line-lat { stroke: var(--accent);      }
-
-.trends-dot {
-  stroke-width: 0;
-}
-.trends-dot.trends-line-dl  { fill: var(--download-to); }
-.trends-dot.trends-line-ul  { fill: var(--upload-to);   }
-.trends-dot.trends-line-lat { fill: var(--accent);      }
-
-.trends-status {
-  font-size: 13px;
+.history-pager-ellipsis {
+  font-size: 12px;
   color: var(--text-muted);
-  text-align: center;
-  padding: 6px 0 0;
+  padding: 0 4px;
 }
 
-.trends-status[hidden] {
-  display: none !important;
-}
 
 @media (max-width: 560px) {
   .history-table thead th:nth-child(1),
@@ -1059,11 +999,8 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .trends-head {
-    gap: 8px;
-  }
-  .trends-export-btn,
-  .trends-window-btn {
+  .history-export-btn,
+  .history-page-btn {
     font-size: 11px;
     padding: 5px 8px;
   }
