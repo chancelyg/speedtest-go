@@ -63,6 +63,15 @@ type Handler struct {
 	// a semaphore slot; rejectedTotal counts those rejected with 503.
 	acceptedTotal atomic.Int64
 	rejectedTotal atomic.Int64
+
+	// Phase 4 injection points. Both are nil by default — agent A (Prometheus
+	// metrics_handler.go) and agent B (ratelimit_handler.go) define the
+	// concrete types and instantiate these fields in New() below. Keeping
+	// them as interface{} pointers here means handler.go itself does not
+	// import prometheus or x/time/rate; the optional dependencies stay
+	// confined to their owning files.
+	metrics any // Phase 4-A: *metricsRegistry (defined in metrics_handler.go)
+	limiter any // Phase 4-B: *rateLimiter     (defined in ratelimit_handler.go)
 }
 
 // New creates a Handler bound to the given configuration. The store argument
@@ -76,12 +85,21 @@ func New(cfg *config.Config, s store.Store) *Handler {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 10
 	}
-	return &Handler{
+	h := &Handler{
 		cfg:       cfg,
 		sem:       make(chan struct{}, maxConcurrent),
 		store:     s,
 		startedAt: time.Now(),
 	}
+	// === [P4-A: metrics init] === — agent A constructs *metricsRegistry,
+	// registers collectors with promauto, and assigns h.metrics = reg.
+	// === [P4-A end] ===
+
+	// === [P4-B: limiter init] === — agent B constructs *rateLimiter when
+	// cfg.RatePerMin > 0 (no-op otherwise), starts the eviction goroutine,
+	// and assigns h.limiter = rl.
+	// === [P4-B end] ===
+	return h
 }
 
 // acquire tries to take a slot from the concurrency semaphore.

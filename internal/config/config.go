@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,7 +23,7 @@ const (
 
 // Config holds all runtime configuration loaded from environment variables.
 //
-//	SPEEDTEST_HOST                     Bind address                default: 0.0.0.0
+//	SPEEDTEST_HOST                     Bind address                default: ::      (dual-stack)
 //	SPEEDTEST_PORT                     Listen port                 default: 8080
 //	SPEEDTEST_MODE                     "size" or "time"            default: time
 //	SPEEDTEST_DURATION                 Seconds (time mode)         default: 15
@@ -33,25 +34,33 @@ const (
 //	SPEEDTEST_WARMUP_MS                Throughput slow-start trim  default: 500
 //	SPEEDTEST_DB_PATH                  SQLite history file path    default: ./speedtest.db  ("" = disable history)
 //	SPEEDTEST_HISTORY_RETENTION_DAYS   Days to keep history        default: 90              (0 = keep forever)
+//	SPEEDTEST_RATE_PER_MIN             Per-IP rate limit (req/min) default: 0               (0 = unlimited)
+//	SPEEDTEST_CONFIG                   Optional JSON config file   default: "" (no file)
 type Config struct {
-	Host                  string
-	Port                  string
-	Mode                  Mode
-	Duration              time.Duration
-	DownloadMB            int
-	UploadMB              int
-	Streams               int
-	MaxConcurrent         int
-	WarmupMs              int    // Phase 2: drop first N ms of throughput samples (slow-start trim)
-	DBPath                string // Phase 3: SQLite path; empty disables persistence
-	HistoryRetentionDays  int    // Phase 3: 0 = keep forever
+	Host                 string
+	Port                 string
+	Mode                 Mode
+	Duration             time.Duration
+	DownloadMB           int
+	UploadMB             int
+	Streams              int
+	MaxConcurrent        int
+	WarmupMs             int    // Phase 2: drop first N ms of throughput samples (slow-start trim)
+	DBPath               string // Phase 3: SQLite path; empty disables persistence
+	HistoryRetentionDays int    // Phase 3: 0 = keep forever
+	RatePerMin           int    // Phase 4 (B): per-IP requests/min limit; 0 = disabled (default)
+	ConfigFilePath       string // Phase 4 (C): JSON config file path (CLI/env override)
 }
 
 // Load reads configuration from environment variables, applying defaults
 // where variables are absent or invalid.
+//
+// Phase 4 Track C will introduce LoadWithSources(args, env) that layers a
+// JSON config file underneath the env defaults and CLI flags on top. This
+// Load() function is preserved as the env-only entry point.
 func Load() *Config {
 	return &Config{
-		Host:                 envStr("SPEEDTEST_HOST", "0.0.0.0"),
+		Host:                 envStr("SPEEDTEST_HOST", "::"),
 		Port:                 envPort("SPEEDTEST_PORT", "8080"),
 		Mode:                 envMode("SPEEDTEST_MODE", ModeTime),
 		Duration:             envDuration("SPEEDTEST_DURATION", 15),
@@ -62,12 +71,23 @@ func Load() *Config {
 		WarmupMs:             envInt("SPEEDTEST_WARMUP_MS", 500, 0, 10_000),
 		DBPath:               envStrAllowEmpty("SPEEDTEST_DB_PATH", "./speedtest.db"),
 		HistoryRetentionDays: envInt("SPEEDTEST_HISTORY_RETENTION_DAYS", 90, 0, 3650),
+		RatePerMin:           envInt("SPEEDTEST_RATE_PER_MIN", 0, 0, 100_000),
+		ConfigFilePath:       envStrAllowEmpty("SPEEDTEST_CONFIG", ""),
 	}
 }
 
 // Addr returns the combined "host:port" listen address.
+// Addr returns the canonical "host:port" listen string.
+//
+// IPv6 host literals (containing ':') are wrapped in square brackets so the
+// net.Listen TCP parser accepts them, e.g. "::" -> "[::]:8080". Hostnames
+// and IPv4 literals pass through untouched.
 func (c *Config) Addr() string {
-	return fmt.Sprintf("%s:%s", c.Host, c.Port)
+	host := c.Host
+	if strings.ContainsRune(host, ':') && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return fmt.Sprintf("%s:%s", host, c.Port)
 }
 
 // ── env helpers ───────────────────────────────────────────────────────────

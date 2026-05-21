@@ -19,8 +19,9 @@ func TestDefaultValues(t *testing.T) {
 
 	cfg := config.Load()
 
-	if cfg.Host != "0.0.0.0" {
-		t.Errorf("Host = %q, want %q", cfg.Host, "0.0.0.0")
+	// Phase 4.6: default host is "::" so the listener accepts both v4 and v6.
+	if cfg.Host != "::" {
+		t.Errorf("Host = %q, want %q", cfg.Host, "::")
 	}
 	if cfg.Port != "8080" {
 		t.Errorf("Port = %q, want %q", cfg.Port, "8080")
@@ -204,5 +205,23 @@ func TestMaxConcurrentCappedAtMaximum(t *testing.T) {
 	cfg := config.Load()
 	if cfg.MaxConcurrent != 100 {
 		t.Errorf("MaxConcurrent=9999 should be clamped to 100, got %d", cfg.MaxConcurrent)
+	}
+}
+
+func TestAddrWrapsIPv6InBrackets(t *testing.T) {
+	cases := []struct {
+		host, port, want string
+	}{
+		{"::", "8080", "[::]:8080"},
+		{"::1", "9090", "[::1]:9090"},
+		{"0.0.0.0", "8080", "0.0.0.0:8080"},
+		{"localhost", "8080", "localhost:8080"},
+		{"127.0.0.1", "8080", "127.0.0.1:8080"},
+	}
+	for _, tc := range cases {
+		cfg := &config.Config{Host: tc.host, Port: tc.port}
+		if got := cfg.Addr(); got != tc.want {
+			t.Errorf("Addr(host=%q, port=%q) = %q, want %q", tc.host, tc.port, got, tc.want)
+		}
 	}
 }

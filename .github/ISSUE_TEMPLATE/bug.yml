@@ -1,0 +1,18 @@
+# Phase 4 Track E — agent E to flesh out into a structured bug form.
+name: Bug report
+description: Something is broken
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Steps to reproduce, expected behaviour, observed behaviour.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: speedtest-go version (./speedtest --version)
+    validations:
+      required: true

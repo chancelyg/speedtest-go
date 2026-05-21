@@ -12,6 +12,13 @@
     } catch (_) {}
   </script>
   <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+  <!-- === [P4-D: PWA head links] === Agent D fills in the manifest link,
+       apple-touch-icon, theme-color meta, and the inline sw registration
+       <script> at the bottom of <body>. -->
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#5b6cff" />
+  <link rel="apple-touch-icon" sizes="192x192" href="/icons/favicon-192.svg" />
+  <!-- === [P4-D end] === -->
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -238,5 +245,9 @@
   <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
 
   <script type="module" src="app.js"></script>
+  <!-- === [P4-D: service worker registration] === Agent D inlines the
+       navigator.serviceWorker.register('/sw.js') call here (guarded by
+       'serviceWorker' in navigator). Keep it inline and tiny — no module. -->
+  <!-- === [P4-D end] === -->
 </body>
 </html>

@@ -32,6 +32,21 @@ type ctxKey struct{ name string }
 var requestIDKey = ctxKey{name: "request_id"}
 
 func main() {
+	// === [P4-C: CLI flag parsing] ===
+	// Agent C: replace cfg := config.Load() with cfg := config.LoadWithSources(
+	//   os.Args[1:], os.Environ()) so the precedence is CLI > env > JSON file
+	//   > defaults. Register all SPEEDTEST_* mirror flags (--port, --host,
+	//   --mode, --duration, --streams, --max-concurrent, --db-path,
+	//   --rate-per-min, --config) plus the meta flags --version / --help.
+	// === [P4-C end] ===
+
+	// === [P4-E: version flag prints] ===
+	// Agent C handles --version (after flag.Parse) and prints the
+	// goreleaser-injected version/commit/date triplet, then exits 0. Agent E
+	// (goreleaser) wires the ldflags. The triplet vars live in this file as
+	// package-level `var version = "dev"` etc.
+	// === [P4-E end] ===
+
 	// Initialise the default structured logger. JSON output to stdout makes
 	// the binary friendly to log shippers (Loki, Vector, etc.) without
 	// requiring any external runtime dependency.
@@ -129,9 +144,20 @@ func newServer(cfg *config.Config) *http.Server {
 // newServerWithStore is the full constructor used by main(). Tests that need
 // the history endpoints wired in pass a non-nil store.
 func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
+	mux := buildMux(cfg, s)
+
+	// === [P4-B: rate-limit middleware wrap] ===
+	// Agent B: wrap mux with h.RateLimit(mux) before passing to
+	// loggingMiddleware. h must be reachable here — agent B can either:
+	//   1. change buildMux to return (*http.ServeMux, *handler.Handler) and
+	//      destructure here, or
+	//   2. keep a package-level reference to the latest Handler (less clean).
+	// Option 1 is preferred.
+	// === [P4-B end] ===
+
 	return &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           loggingMiddleware(buildMux(cfg, s)),
+		Handler:           loggingMiddleware(mux),
 		ReadHeaderTimeout: 30 * time.Second,
 		ReadTimeout:       0,
 		WriteTimeout:      0,
@@ -164,6 +190,12 @@ func buildMux(cfg *config.Config, s store.Store) *http.ServeMux {
 
 	// Health probe — always wired; respects history availability.
 	mux.HandleFunc("/healthz", h.HealthHandler)
+
+	// === [P4-A: /metrics route] ===
+	// Agent A: register `mux.HandleFunc("/metrics", h.MetricsHandler)` here,
+	// or use promhttp.Handler() directly if preferred — keep the route name
+	// `/metrics` so Prometheus scrape config Just Works.
+	// === [P4-A end] ===
 
 	// Results history. /api/results/export is registered before /api/results
 	// so the longest-matching pattern wins (Go ServeMux semantics).
