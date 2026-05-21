@@ -1,6 +1,6 @@
 'use strict';
 
-import { gaugeAngle, windowStats, pushWindow, throughputMbps } from './metrics.mjs';
+import { gaugeAngle, windowStats, pushWindow, throughputMbps, jitterRFC3550 } from './metrics.mjs';
 import { mountToast } from './toast.mjs';
 
 // === [Phase 2-3 module imports] ===
@@ -45,6 +45,7 @@ const i18n = {
     networkError: '网络中断',
     unknownError: '未知错误',
     retry:        '重试',
+    bufferbloat:  'Bufferbloat',
   },
   en: {
     title:        'Speedtest',
@@ -78,6 +79,7 @@ const i18n = {
     networkError: 'Network error',
     unknownError: 'Unknown error',
     retry:        'Retry',
+    bufferbloat:  'Bufferbloat',
   },
 };
 
@@ -237,6 +239,10 @@ function applyLang() {
   $('download-jitter-label').textContent  = t('jitter');
   $('upload-jitter-label').textContent    = t('jitter');
   $('packet-loss-label').textContent      = t('packetLoss');
+  // === [F1: bufferbloat label i18n] ===
+  const bbLabel = $('bufferbloat-label');
+  if (bbLabel) bbLabel.textContent = t('bufferbloat');
+  // === [F1 end] ===
   $('ip-label').textContent          = t('ip');
   $('connection-label').textContent  = t('connection');
   $('footer-text').textContent       = t('footer');
@@ -290,6 +296,49 @@ function setStage(key) {
   else if (key === 'stageUp')   currentPhase = 'upload';
   else                          currentPhase = 'idle';
 }
+
+// === [F1: bufferbloat + slow-start state] ===
+// Module-scoped state for Phase 2 measurement accuracy:
+//   - idleLatencySamples: RTTs collected while currentPhase === 'ping'
+//   - loadedLatencySamples: RTTs collected during 'download' / 'upload'
+//   - dlThroughputSamples / ulThroughputSamples: (elapsedMs, mbps) pairs so
+//     we can recompute the final number after dropping warmup samples while
+//     the gauge stays live across the whole test.
+// Reset at the start of every runTest() in the [F1: bufferbloat reset] block.
+let idleLatencySamples   = [];
+let loadedLatencySamples = [];
+let dlThroughputSamples  = [];
+let ulThroughputSamples  = [];
+
+/**
+ * Mean of a numeric array; 0 for empty.
+ * @param {number[]} xs
+ * @returns {number}
+ */
+function average(xs) {
+  if (!xs || xs.length === 0) return 0;
+  let s = 0;
+  for (const x of xs) s += x;
+  return s / xs.length;
+}
+
+/**
+ * Map bufferbloat delta (loadedAvg - idleAvg, ms) to an A/B/C/D grade.
+ * Thresholds borrowed from the DSLReports / Waveform Bufferbloat tradition:
+ *   < 5 ms : A — imperceptible
+ *   < 30 ms: B — acceptable, faint impact on VoIP/games
+ *   < 60 ms: C — noticeable, video calls degrade
+ *   ≥ 60 ms: D — severe, real-time apps unusable under load
+ * @param {number} deltaMs
+ * @returns {'A'|'B'|'C'|'D'}
+ */
+function bufferbloatGrade(deltaMs) {
+  if (!Number.isFinite(deltaMs) || deltaMs < 5)  return 'A';
+  if (deltaMs < 30) return 'B';
+  if (deltaMs < 60) return 'C';
+  return 'D';
+}
+// === [F1 end] ===
 
 // Arc length of the semicircle (π × r = π × 80). Must match the SVG path.
 const ARC_LENGTH = Math.PI * 80;
@@ -409,12 +458,20 @@ function renderPingStats(allSamples, dlSamples, ulSamples) {
   if (dlSamples.length > 0) {
     const dl = windowStats(dlSamples);
     setVal('download-latency', dl.latency.toFixed(1) + ' ms');
-    setVal('download-jitter',  dl.jitter.toFixed(1)  + ' ms');
+    // === [F1: RFC 3550 jitter] === Replace the simple mean-abs-diff jitter
+    // from windowStats with the smoothed RFC 3550 inter-packet jitter.
+    // Latency still uses windowStats' trimmed mean.
+    const dlRtts = dlSamples.filter(s => s.ok).map(s => s.rtt);
+    setVal('download-jitter',  jitterRFC3550(dlRtts).toFixed(1) + ' ms');
+    // === [F1 end] ===
   }
   if (ulSamples.length > 0) {
     const ul = windowStats(ulSamples);
     setVal('upload-latency', ul.latency.toFixed(1) + ' ms');
-    setVal('upload-jitter',  ul.jitter.toFixed(1)  + ' ms');
+    // === [F1: RFC 3550 jitter] ===
+    const ulRtts = ulSamples.filter(s => s.ok).map(s => s.rtt);
+    setVal('upload-jitter',  jitterRFC3550(ulRtts).toFixed(1) + ' ms');
+    // === [F1 end] ===
   }
 }
 
@@ -433,6 +490,17 @@ async function runPingLoop(signal) {
       allSamples = pushWindow(allSamples, sample, PING_WINDOW);
       if      (currentPhase === 'download') dlSamples = pushWindow(dlSamples, sample, PING_WINDOW);
       else if (currentPhase === 'upload')   ulSamples = pushWindow(ulSamples, sample, PING_WINDOW);
+      // === [F1: bufferbloat sample routing] ===
+      // Unlike the rolling per-direction windows above (used for live UI
+      // metrics), bufferbloat needs the *full* history of idle vs loaded
+      // RTTs so the end-of-test delta reflects the whole load period, not
+      // just the last 20 pings. Only successful pings contribute to either
+      // bucket — failed pings show up as packet loss instead.
+      if (sample.ok) {
+        if      (currentPhase === 'ping')                                idleLatencySamples.push(sample.rtt);
+        else if (currentPhase === 'download' || currentPhase === 'upload') loadedLatencySamples.push(sample.rtt);
+      }
+      // === [F1 end] ===
       renderPingStats(allSamples, dlSamples, ulSamples);
     } catch (e) {
       if (e.name === 'AbortError') break;
@@ -490,22 +558,62 @@ async function measureDownload(signal) {
       const now = performance.now();
       if (now < measureStart) continue;     // warmup — discard
       totalReceived += value.byteLength;
-      setSpeed('download', throughputMbps(totalReceived, now - measureStart));
+      const elapsedMs = now - measureStart;
+      const mbps      = throughputMbps(totalReceived, elapsedMs);
+      setSpeed('download', mbps);
       // === [F2: chart push DL] === F2 pushes (now - measureStart, mbps, null)
       // to speedChart.pushPoint() so the line chart fills during download.
       // === [F2 end] ===
-      // === [F1: slow-start trim] === F1 may consult a shared `warmupMs`
-      // (from /api/config) and exclude samples earlier than that window from
-      // the displayed throughput; the gauge `setSpeed` above runs every
-      // sample regardless for liveness.
+      // === [F1: slow-start trim] ===
+      // Record (elapsedMs, cumulative bytes) so the final number can be
+      // recomputed over only the post-warmup tail. The gauge above keeps
+      // rendering every sample for liveness.
+      dlThroughputSamples.push({ elapsedMs, bytes: totalReceived });
       // === [F1 end] ===
     }
   };
 
   await Promise.all(Array.from({ length: streams }, (_, i) => streamTask(i)));
 
-  return throughputMbps(totalReceived, performance.now() - measureStart);
+  // === [F1: slow-start trim — final throughput] ===
+  // Recompute the reported throughput over only the post-warmup window by
+  // subtracting the bytes-and-time that elapsed before the warmup boundary.
+  // Falls back to the original total-bytes / total-elapsed calculation when
+  // there aren't enough post-warmup samples (very short tests or slow links).
+  return trimThroughput(dlThroughputSamples, totalReceived, performance.now() - measureStart);
+  // === [F1 end] ===
 }
+
+// === [F1: slow-start trim helper] ===
+/**
+ * Compute final throughput, discarding samples taken before `srvCfg.warmupMs`
+ * to remove TCP slow-start bias. If no post-warmup samples exist (test was
+ * shorter than the warmup window), falls back to the unfiltered total.
+ *
+ * @param {{elapsedMs:number, bytes:number}[]} samples  Recorded during measurement.
+ * @param {number} totalBytes  Cumulative bytes transferred at end of test.
+ * @param {number} totalElapsedMs  Wall time from measureStart to test end.
+ * @returns {number}  Throughput in Mbps.
+ */
+function trimThroughput(samples, totalBytes, totalElapsedMs) {
+  const warmupMs = Number(srvCfg.warmupMs) || 0;
+  if (warmupMs <= 0 || samples.length === 0) {
+    return throughputMbps(totalBytes, totalElapsedMs);
+  }
+  // Find the first sample at or after the warmup boundary. Bytes / time
+  // before that point are subtracted from the totals.
+  const idx = samples.findIndex(s => s.elapsedMs >= warmupMs);
+  if (idx === -1) {
+    // Whole test was inside the warmup window — fall back so we never
+    // report 0 just because the test was short.
+    return throughputMbps(totalBytes, totalElapsedMs);
+  }
+  const baseline   = idx === 0 ? { elapsedMs: 0, bytes: 0 } : samples[idx - 1];
+  const tailBytes  = totalBytes - baseline.bytes;
+  const tailMs     = totalElapsedMs - baseline.elapsedMs;
+  return throughputMbps(tailBytes, tailMs);
+}
+// === [F1 end] ===
 
 /* ── Upload ──────────────────────────────────────────────────────────────── */
 // Pre-generate a 1 MB random chunk reused across requests.
@@ -591,12 +699,16 @@ async function measureUpload(signal) {
   const onChunk = (delta, now) => {
     if (now < measureStart) return;
     totalSent += delta;
-    setSpeed('upload', throughputMbps(totalSent, now - measureStart));
+    const elapsedMs = now - measureStart;
+    const mbps      = throughputMbps(totalSent, elapsedMs);
+    setSpeed('upload', mbps);
     // === [F2: chart push UL] === F2 pushes (now - measureStart, null, mbps)
     // to speedChart.pushPoint() so the line chart fills during upload.
     // === [F2 end] ===
-    // === [F1: slow-start trim] === Same as in measureDownload — F1 trims
-    // warmup samples for the displayed throughput total.
+    // === [F1: slow-start trim] ===
+    // Record (elapsedMs, cumulative bytes) for the same post-warmup
+    // recomputation done in measureDownload.
+    ulThroughputSamples.push({ elapsedMs, bytes: totalSent });
     // === [F1 end] ===
   };
 
@@ -632,7 +744,9 @@ async function measureUpload(signal) {
   const worker = activeCfg.mode === 'time' ? workerTime : workerSize;
   await Promise.all(Array.from({ length: streams }, worker));
 
-  return throughputMbps(totalSent, performance.now() - measureStart);
+  // === [F1: slow-start trim — final throughput] ===
+  return trimThroughput(ulThroughputSamples, totalSent, performance.now() - measureStart);
+  // === [F1 end] ===
 }
 
 /* ── Orchestrate full test ───────────────────────────────────────────────── */
@@ -658,8 +772,19 @@ async function runTest() {
   pingNetworkErrorShown = false;
 
   // === [F1: bufferbloat reset] ===
-  // F1 should reset its idle-latency / loaded-latency / grade state here
-  // before the new run begins.
+  // Wipe Phase 2 state from the previous run so the new test starts clean.
+  // Note: empty-array assignments here are intentional — these arrays are
+  // module-scoped and shared with runPingLoop / measureDownload /
+  // measureUpload, so we replace the reference rather than mutating the
+  // old one (other closures may still hold the previous array briefly).
+  idleLatencySamples   = [];
+  loadedLatencySamples = [];
+  dlThroughputSamples  = [];
+  ulThroughputSamples  = [];
+  const bbCell  = $('bufferbloat-grade-cell');
+  const bbGrade = $('bufferbloat-grade');
+  if (bbCell)  bbCell.hidden = true;
+  if (bbGrade) bbGrade.textContent = '--';
   // === [F1 end] ===
 
   // === [F2: chart reset] ===
@@ -676,8 +801,9 @@ async function runTest() {
   try {
     setStage('stagePing');
     // === [F1: idle-latency baseline] ===
-    // F1 should mark "currently measuring idle latency" so runPingLoop can
-    // route the next ~1.5s of samples into the idle-latency window.
+    // setStage('stagePing') above set currentPhase = 'ping', so the ping
+    // loop will route the next ~1.5s of samples into idleLatencySamples
+    // (see bufferbloat sample routing in runPingLoop).
     // === [F1 end] ===
     // Warm up the ping window before kicking off throughput tests so the
     // first metrics shown are based on real samples, not zeros.
@@ -694,8 +820,18 @@ async function runTest() {
     }
 
     // === [F1: bufferbloat grade compute] ===
-    // F1 computes loadedLatency - idleLatency, maps to A/B/C/D, writes to
-    // #bufferbloat-grade and unhides #bufferbloat-grade-cell.
+    // Only compute when both buckets actually have samples — otherwise the
+    // grade is meaningless and showing "A" by default would be misleading.
+    if (idleLatencySamples.length > 0 && loadedLatencySamples.length > 0) {
+      const idleAvg   = average(idleLatencySamples);
+      const loadedAvg = average(loadedLatencySamples);
+      const bbDelta   = Math.max(0, loadedAvg - idleAvg);
+      const grade     = bufferbloatGrade(bbDelta);
+      const bbGradeEl = $('bufferbloat-grade');
+      const bbCellEl  = $('bufferbloat-grade-cell');
+      if (bbGradeEl) bbGradeEl.textContent = `${grade} (+${bbDelta.toFixed(0)} ms)`;
+      if (bbCellEl)  bbCellEl.hidden = false;
+    }
     // === [F1 end] ===
 
     // === [F3: persist result] ===

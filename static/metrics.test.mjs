@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gaugeAngle, windowStats, pushWindow, throughputMbps } from './metrics.mjs';
+import { gaugeAngle, windowStats, pushWindow, throughputMbps, jitterRFC3550, percentile } from './metrics.mjs';
 
 /* ── gaugeAngle ────────────────────────────────────────────────────────── */
 
@@ -108,4 +108,99 @@ test('throughputMbps: zero or negative elapsed returns 0', () => {
 test('throughputMbps: NaN inputs return 0', () => {
   assert.equal(throughputMbps(NaN, 100), 0);
   assert.equal(throughputMbps(100, NaN), 0);
+});
+
+/* ── jitterRFC3550 ─────────────────────────────────────────────────────── */
+
+test('jitterRFC3550: empty input returns 0', () => {
+  assert.equal(jitterRFC3550([]), 0);
+});
+
+test('jitterRFC3550: single sample returns 0 (no pair to diff)', () => {
+  assert.equal(jitterRFC3550([42]), 0);
+});
+
+test('jitterRFC3550: constant series stays at 0', () => {
+  assert.equal(jitterRFC3550([10, 10, 10, 10, 10]), 0);
+});
+
+test('jitterRFC3550: hand-computed reference [10, 12, 11, 13]', () => {
+  // J(0)=0
+  // i=1: D=|12-10|=2, J = 0 + (2 - 0)/16 = 0.125
+  // i=2: D=|11-12|=1, J = 0.125 + (1 - 0.125)/16 = 0.1796875
+  // i=3: D=|13-11|=2, J = 0.1796875 + (2 - 0.1796875)/16 = 0.29345703125
+  const j = jitterRFC3550([10, 12, 11, 13]);
+  assert.ok(Math.abs(j - 0.29345703125) < 1e-12, `got ${j}`);
+});
+
+test('jitterRFC3550: two samples returns |D|/16', () => {
+  // J = 0 + (|D| - 0)/16 = |D|/16
+  assert.equal(jitterRFC3550([10, 18]), 0.5);   // (8/16)
+  assert.equal(jitterRFC3550([100, 90]), 0.625); // (10/16)
+});
+
+test('jitterRFC3550: converges toward the mean absolute diff for long series', () => {
+  // Repeated diff of 4 → equilibrium J ≈ 4 (since J += (4 - J)/16 settles where 4 - J ≈ 0).
+  const rtts = [];
+  let x = 0;
+  for (let i = 0; i < 500; i++) { rtts.push(x); x = x === 0 ? 4 : 0; } // diffs = 4 each step
+  const j = jitterRFC3550(rtts);
+  assert.ok(Math.abs(j - 4) < 1e-3, `expected ~4, got ${j}`);
+});
+
+test('jitterRFC3550: ignores NaN by treating it as a non-finite drop', () => {
+  // Robustness: must not blow up if a stray non-finite slips in.
+  const j = jitterRFC3550([10, NaN, 12, 14]);
+  // Filter -> [10, 12, 14]; J(0)=0, i=1 D=2 J=0.125, i=2 D=2 J=0.125 + (2-0.125)/16 = 0.2421875
+  assert.ok(Math.abs(j - 0.2421875) < 1e-12, `got ${j}`);
+});
+
+/* ── percentile ────────────────────────────────────────────────────────── */
+
+test('percentile: empty samples returns 0', () => {
+  assert.equal(percentile([], 50), 0);
+  assert.equal(percentile([], 99), 0);
+});
+
+test('percentile: single sample returns that sample for any p', () => {
+  assert.equal(percentile([7], 0), 7);
+  assert.equal(percentile([7], 50), 7);
+  assert.equal(percentile([7], 100), 7);
+});
+
+test('percentile: p0 = min, p100 = max', () => {
+  const s = [3, 1, 4, 1, 5, 9, 2, 6];
+  assert.equal(percentile(s, 0),   1);
+  assert.equal(percentile(s, 100), 9);
+});
+
+test('percentile: p50 on 1..100 ≈ 50.5 (linear interpolation)', () => {
+  const s = Array.from({ length: 100 }, (_, i) => i + 1);
+  const m = percentile(s, 50);
+  assert.ok(Math.abs(m - 50.5) < 1e-9, `got ${m}`);
+});
+
+test('percentile: p95 on 1..100 ≈ 95.05', () => {
+  const s = Array.from({ length: 100 }, (_, i) => i + 1);
+  const m = percentile(s, 95);
+  assert.ok(Math.abs(m - 95.05) < 1e-9, `got ${m}`);
+});
+
+test('percentile: does not require pre-sorted input (sorts internally)', () => {
+  const a = percentile([5, 1, 4, 3, 2], 50);
+  const b = percentile([1, 2, 3, 4, 5], 50);
+  assert.equal(a, b);
+});
+
+test('percentile: does not mutate caller array', () => {
+  const s = [5, 1, 4, 3, 2];
+  const frozen = s.slice();
+  percentile(s, 50);
+  assert.deepEqual(s, frozen);
+});
+
+test('percentile: clamps p outside [0,100]', () => {
+  const s = [1, 2, 3, 4, 5];
+  assert.equal(percentile(s, -10),   1);   // clamps to 0 → min
+  assert.equal(percentile(s, 1000),  5);   // clamps to 100 → max
 });

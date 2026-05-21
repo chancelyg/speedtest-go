@@ -90,3 +90,63 @@ export function throughputMbps(bytes, elapsedMs) {
   if (!Number.isFinite(bytes) || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0;
   return (bytes * 8) / (elapsedMs * 1000);
 }
+
+/**
+ * RFC 3550 inter-packet jitter (smoothed mean absolute deviation):
+ *
+ *     J(0) = 0
+ *     J(i) = J(i-1) + (|D(i, i-1)| - J(i-1)) / 16
+ *
+ * where D(i, i-1) = rtt[i] - rtt[i-1]. The /16 weight is the canonical
+ * exponential moving average constant from the RFC — it smooths bursts
+ * while still tracking sustained changes. The first sample seeds the
+ * series but contributes nothing on its own (no pair to diff yet).
+ *
+ * Non-finite values (NaN, ±Infinity, null, undefined) are filtered out
+ * before the recurrence so a single bad sample does not poison the
+ * series. Returns 0 for inputs with fewer than 2 finite samples.
+ *
+ * @param {number[]} samples  Per-ping RTT values in milliseconds.
+ * @returns {number}          Jitter in the same unit; 0 for < 2 samples.
+ */
+export function jitterRFC3550(samples) {
+  if (!samples || samples.length < 2) return 0;
+  const finite = samples.filter(Number.isFinite);
+  if (finite.length < 2) return 0;
+  let j = 0;
+  for (let i = 1; i < finite.length; i++) {
+    const d = Math.abs(finite[i] - finite[i - 1]);
+    j = j + (d - j) / 16;
+  }
+  return j;
+}
+
+/**
+ * Linear-interpolation percentile (matches NumPy / Excel "PERCENTILE.INC"
+ * and the C=1 variant in Hyndman & Fan 1996). For an empty input returns
+ * 0 so callers can render "--" safely.
+ *
+ *   rank = (p / 100) * (n - 1)
+ *   floor = sorted[⌊rank⌋]
+ *   ceil  = sorted[⌈rank⌉]
+ *   value = floor + (rank - ⌊rank⌋) * (ceil - floor)
+ *
+ * The input array is copied before sorting so callers' state is preserved
+ * (immutability requirement). `p` is clamped to [0, 100].
+ *
+ * @param {number[]} samples
+ * @param {number} p  Percentile in [0, 100].
+ * @returns {number}  Interpolated percentile value; 0 when samples is empty.
+ */
+export function percentile(samples, p) {
+  if (!samples || samples.length === 0) return 0;
+  const sorted = samples.slice().sort((a, b) => a - b);
+  const n = sorted.length;
+  if (n === 1) return sorted[0];
+  const clamped = Math.max(0, Math.min(100, p));
+  const rank    = (clamped / 100) * (n - 1);
+  const lo      = Math.floor(rank);
+  const hi      = Math.ceil(rank);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
+}
