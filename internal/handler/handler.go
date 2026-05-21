@@ -93,11 +93,14 @@ func New(cfg *config.Config, s store.Store) *Handler {
 	}
 	// === [P4-A: metrics init] === — agent A constructs *metricsRegistry,
 	// registers collectors with promauto, and assigns h.metrics = reg.
+	h.metrics = newMetricsRegistry(h.sem)
 	// === [P4-A end] ===
 
-	// === [P4-B: limiter init] === — agent B constructs *rateLimiter when
-	// cfg.RatePerMin > 0 (no-op otherwise), starts the eviction goroutine,
-	// and assigns h.limiter = rl.
+	// === [P4-B: limiter init] === — newRateLimiter returns nil when
+	// cfg.RatePerMin <= 0, which is the default. In that mode RateLimit is a
+	// transparent pass-through and no GC goroutine is started, so a vanilla
+	// single-machine deployment pays zero runtime cost.
+	h.limiter = newRateLimiter(cfg.RatePerMin)
 	// === [P4-B end] ===
 	return h
 }
@@ -109,9 +112,15 @@ func (h *Handler) acquire() bool {
 	select {
 	case h.sem <- struct{}{}:
 		h.acceptedTotal.Add(1)
+		if reg, ok := h.metrics.(*metricsRegistry); ok && reg != nil {
+			reg.recordAdmission(true)
+		}
 		return true
 	default:
 		h.rejectedTotal.Add(1)
+		if reg, ok := h.metrics.(*metricsRegistry); ok && reg != nil {
+			reg.recordAdmission(false)
+		}
 		return false
 	}
 }
@@ -206,6 +215,13 @@ func (h *Handler) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.release()
 
+	// Record bytes streamed and wall-clock duration regardless of how the
+	// handler exits. Tracked locally so that early client disconnects still
+	// produce useful observability.
+	started := time.Now()
+	var sent int64
+	defer func() { h.ObserveTest("down", sent, time.Since(started)) }()
+
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "no-store")
 
@@ -226,7 +242,7 @@ func (h *Handler) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	// If the client explicitly requested a specific byte count (size mode),
 	// honour it regardless of the server's default mode setting.
 	if r.URL.Query().Get("bytes") != "" || r.URL.Query().Get("size") != "" {
-		h.downloadBySize(w, totalBytes)
+		sent = h.downloadBySize(w, totalBytes)
 		return
 	}
 
@@ -242,41 +258,47 @@ func (h *Handler) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch h.cfg.Mode {
 	case config.ModeTime:
-		h.downloadByTime(w, duration)
+		sent = h.downloadByTime(w, duration)
 	default:
-		h.downloadBySize(w, totalBytes)
+		sent = h.downloadBySize(w, totalBytes)
 	}
 }
 
-func (h *Handler) downloadBySize(w http.ResponseWriter, total int) {
+func (h *Handler) downloadBySize(w http.ResponseWriter, total int) int64 {
 	w.Header().Set("Content-Length", intStr(total))
 
-	written := 0
-	for written < total {
+	var written int64
+	for int(written) < total {
 		n := len(randomPayload)
-		if written+n > total {
-			n = total - written
+		if int(written)+n > total {
+			n = total - int(written)
 		}
-		if _, err := w.Write(randomPayload[:n]); err != nil {
-			return
+		m, err := w.Write(randomPayload[:n])
+		written += int64(m)
+		if err != nil {
+			return written
 		}
-		written += n
 	}
+	return written
 }
 
-func (h *Handler) downloadByTime(w http.ResponseWriter, duration time.Duration) {
+func (h *Handler) downloadByTime(w http.ResponseWriter, duration time.Duration) int64 {
 	// No Content-Length: chunked transfer encoding until deadline.
 	deadline := time.Now().Add(duration)
 	flusher, canFlush := w.(http.Flusher)
 
+	var written int64
 	for time.Now().Before(deadline) {
-		if _, err := w.Write(randomPayload[:]); err != nil {
-			return
+		m, err := w.Write(randomPayload[:])
+		written += int64(m)
+		if err != nil {
+			return written
 		}
 		if canFlush {
 			flusher.Flush()
 		}
 	}
+	return written
 }
 
 // ── /api/upload ───────────────────────────────────────────────────────────
@@ -299,8 +321,13 @@ func (h *Handler) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.release()
 
+	started := time.Now()
+	var received int64
+	defer func() { h.ObserveTest("up", received, time.Since(started)) }()
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
-	received, err := io.Copy(io.Discard, r.Body)
+	n, err := io.Copy(io.Discard, r.Body)
+	received = n
 	if err != nil {
 		// MaxBytesReader returns an error when the limit is exceeded.
 		// Return 413 immediately; the partial byte count is not reported

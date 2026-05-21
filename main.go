@@ -5,12 +5,16 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
+	"errors"
+	"flag"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -21,6 +25,16 @@ import (
 
 //go:embed static
 var staticFiles embed.FS
+
+// Build metadata injected at link time by goreleaser via -ldflags
+// "-X main.version=... -X main.commit=... -X main.date=...". The "dev"
+// defaults make `go run` / local builds visibly distinct from release
+// artifacts without requiring any extra build steps.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 // ctxKey is an unexported type used for context keys to avoid collisions with
 // any package that also stores values in request contexts.
@@ -33,18 +47,28 @@ var requestIDKey = ctxKey{name: "request_id"}
 
 func main() {
 	// === [P4-C: CLI flag parsing] ===
-	// Agent C: replace cfg := config.Load() with cfg := config.LoadWithSources(
-	//   os.Args[1:], os.Environ()) so the precedence is CLI > env > JSON file
-	//   > defaults. Register all SPEEDTEST_* mirror flags (--port, --host,
-	//   --mode, --duration, --streams, --max-concurrent, --db-path,
-	//   --rate-per-min, --config) plus the meta flags --version / --help.
+	// Layered configuration: CLI flags > env vars > JSON config file >
+	// compiled-in defaults. LoadWithSources is pure (no os.Exit, no stderr)
+	// so we handle --version / --help / parse errors at the call site below.
+	cfg, opts, err := config.LoadWithSources(os.Args[1:], os.Getenv)
+	if err != nil {
+		// --help is signalled by flag.ErrHelp; treat it as a clean exit and
+		// re-parse with stderr output so the user sees the auto-generated
+		// usage. Anything else is a real parse / config error.
+		if isHelpErr(err) {
+			printUsage()
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stderr, "speedtest: "+err.Error())
+		os.Exit(2)
+	}
 	// === [P4-C end] ===
 
 	// === [P4-E: version flag prints] ===
-	// Agent C handles --version (after flag.Parse) and prints the
-	// goreleaser-injected version/commit/date triplet, then exits 0. Agent E
-	// (goreleaser) wires the ldflags. The triplet vars live in this file as
-	// package-level `var version = "dev"` etc.
+	if opts.ShowVersion {
+		fmt.Printf("speedtest-go %s (commit %s, built %s)\n", version, commit, date)
+		os.Exit(0)
+	}
 	// === [P4-E end] ===
 
 	// Initialise the default structured logger. JSON output to stdout makes
@@ -52,8 +76,6 @@ func main() {
 	// requiring any external runtime dependency.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
-
-	cfg := config.Load()
 
 	slog.Info("startup config",
 		"mode", string(cfg.Mode),
@@ -144,20 +166,18 @@ func newServer(cfg *config.Config) *http.Server {
 // newServerWithStore is the full constructor used by main(). Tests that need
 // the history endpoints wired in pass a non-nil store.
 func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
-	mux := buildMux(cfg, s)
+	mux, h := buildMux(cfg, s)
 
 	// === [P4-B: rate-limit middleware wrap] ===
-	// Agent B: wrap mux with h.RateLimit(mux) before passing to
-	// loggingMiddleware. h must be reachable here — agent B can either:
-	//   1. change buildMux to return (*http.ServeMux, *handler.Handler) and
-	//      destructure here, or
-	//   2. keep a package-level reference to the latest Handler (less clean).
-	// Option 1 is preferred.
+	// Per-IP rate limiting wraps the mux. When cfg.RatePerMin <= 0 the
+	// limiter is nil and h.RateLimit becomes a transparent pass-through,
+	// which is the default single-machine-deployment behaviour.
+	rateLimited := h.RateLimit(mux)
 	// === [P4-B end] ===
 
 	return &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           loggingMiddleware(mux),
+		Handler:           loggingMiddleware(h, rateLimited),
 		ReadHeaderTimeout: 30 * time.Second,
 		ReadTimeout:       0,
 		WriteTimeout:      0,
@@ -165,7 +185,7 @@ func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
 	}
 }
 
-func buildMux(cfg *config.Config, s store.Store) *http.ServeMux {
+func buildMux(cfg *config.Config, s store.Store) (*http.ServeMux, *handler.Handler) {
 	h := handler.New(cfg, s)
 	mux := http.NewServeMux()
 
@@ -192,9 +212,9 @@ func buildMux(cfg *config.Config, s store.Store) *http.ServeMux {
 	mux.HandleFunc("/healthz", h.HealthHandler)
 
 	// === [P4-A: /metrics route] ===
-	// Agent A: register `mux.HandleFunc("/metrics", h.MetricsHandler)` here,
-	// or use promhttp.Handler() directly if preferred — keep the route name
-	// `/metrics` so Prometheus scrape config Just Works.
+	// Prometheus exposition endpoint. Kept at the conventional `/metrics`
+	// path so default scrape configs Just Work without per-target overrides.
+	mux.HandleFunc("/metrics", h.MetricsHandler)
 	// === [P4-A end] ===
 
 	// Results history. /api/results/export is registered before /api/results
@@ -202,7 +222,7 @@ func buildMux(cfg *config.Config, s store.Store) *http.ServeMux {
 	mux.HandleFunc("/api/results/export", h.ResultsExport)
 	mux.HandleFunc("/api/results", h.ResultsListOrCreate)
 
-	return mux
+	return mux, h
 }
 
 // faviconHandler returns a handler that serves ./favicon.ico from the working
@@ -240,7 +260,7 @@ func newRequestID() string {
 // stamps an X-Request-Id header on the response so clients can correlate
 // failures with server-side records. The request ID is also injected into the
 // request context under requestIDKey for downstream handlers.
-func loggingMiddleware(next http.Handler) http.Handler {
+func loggingMiddleware(h *handler.Handler, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		reqID := newRequestID()
@@ -268,6 +288,13 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			"request_id", reqID,
 			"user_agent", r.UserAgent(),
 		)
+
+		// Phase 4-A: record the request in the Prometheus registry.
+		// h may be nil in tests that build a bare middleware chain; the
+		// metrics observation is then a no-op.
+		if h != nil {
+			h.ObserveRequest(r.Method, r.URL.Path, strconv.Itoa(sw.status))
+		}
 	})
 }
 
@@ -335,4 +362,34 @@ func (c *countingReader) Close() error {
 		return nil
 	}
 	return c.rc.Close()
+}
+
+// isHelpErr reports whether err originated from flag.ErrHelp, i.e. the user
+// passed -h / --help. The config package wraps the original error with %w so
+// errors.Is unwraps correctly.
+func isHelpErr(err error) bool {
+	return errors.Is(err, flag.ErrHelp)
+}
+
+// printUsage writes the same flag descriptions the user would see for any
+// other CLI tool. We build a one-shot FlagSet here purely for its Usage()
+// formatting; LoadWithSources owns the real parser and stays test-friendly.
+func printUsage() {
+	fs := flag.NewFlagSet("speedtest", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.String("config", "", "Path to JSON config file (overrides SPEEDTEST_CONFIG and search paths)")
+	fs.String("host", "", "Bind address (default \"::\")")
+	fs.String("port", "", "Listen port (default \"8080\")")
+	fs.String("mode", "", "Speed-test mode: time | size")
+	fs.Int("duration", 0, "Time-mode duration in seconds")
+	fs.Int("streams", 0, "Parallel stream count")
+	fs.Int("download-mb", 0, "Download size in MB (size mode)")
+	fs.Int("upload-mb", 0, "Upload size in MB (size mode)")
+	fs.Int("max-concurrent", 0, "Max simultaneous tests across all clients")
+	fs.Int("warmup-ms", 0, "Throughput slow-start trim in milliseconds")
+	fs.String("db-path", "", "SQLite history path (\"\" disables persistence)")
+	fs.Int("rate-per-min", 0, "Per-IP rate limit (req/min, 0 = unlimited)")
+	fs.Bool("version", false, "Print version information and exit")
+	fmt.Fprintln(os.Stderr, "Usage: speedtest [flags]")
+	fs.PrintDefaults()
 }

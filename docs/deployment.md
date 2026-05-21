@@ -45,11 +45,14 @@ Restart=always
 RestartSec=5
 
 # 环境变量
-Environment="SPEEDTEST_HOST=0.0.0.0"
+# 默认 SPEEDTEST_HOST=:: 监听 v4 + v6 双栈，无需在 systemd 中显式设置；
+# 仅当内核禁用 IPv6 双栈或部署策略要求仅 v4 时才显式覆盖为 0.0.0.0。
 Environment="SPEEDTEST_PORT=8080"
 Environment="SPEEDTEST_MODE=time"
 Environment="SPEEDTEST_DURATION=15"
 Environment="SPEEDTEST_STREAMS=4"
+# 公网部署可启用每 IP 限流（默认 0 = 关闭）
+# Environment="SPEEDTEST_RATE_PER_MIN=60"
 
 # 资源限制
 LimitNOFILE=65535

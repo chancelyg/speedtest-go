@@ -91,7 +91,7 @@ func lastJSONLine(t *testing.T, buf *bytes.Buffer) map[string]any {
 func TestLoggingMiddlewareEmitsJSON(t *testing.T) {
 	buf := withCapturedLogger(t)
 
-	handler := loggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := loggingMiddleware(nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("hello"))
 	}))
@@ -158,7 +158,7 @@ func TestLoggingMiddlewareCountsBytes(t *testing.T) {
 	const reqBody = "abcdefghij"            // 10 bytes
 	const respBody = "0123456789ABCDEFGHIJ" // 20 bytes
 
-	handler := loggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := loggingMiddleware(nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Drain the body so countingReader registers every byte.
 		_, _ = io.Copy(io.Discard, r.Body)
 		_, _ = w.Write([]byte(respBody))
@@ -183,7 +183,7 @@ func TestLoggingMiddlewareCountsBytes(t *testing.T) {
 func TestRequestIDHeader(t *testing.T) {
 	_ = withCapturedLogger(t)
 
-	handler := loggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := loggingMiddleware(nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -205,7 +205,7 @@ func TestRequestIDHeader(t *testing.T) {
 func TestRequestIDIsUniquePerRequest(t *testing.T) {
 	_ = withCapturedLogger(t)
 
-	handler := loggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	handler := loggingMiddleware(nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	ids := map[string]struct{}{}
 	for i := 0; i < 4; i++ {
@@ -227,7 +227,7 @@ func TestRequestIDInContext(t *testing.T) {
 	_ = withCapturedLogger(t)
 
 	var seen string
-	handler := loggingMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := loggingMiddleware(nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if v, ok := r.Context().Value(requestIDKey).(string); ok {
 			seen = v
 		}
