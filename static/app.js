@@ -197,9 +197,11 @@ function applyLang() {
   $('title').textContent             = t('title');
   $('download-label').textContent    = t('download');
   $('upload-label').textContent      = t('upload');
-  $('latency-label').textContent     = t('latency');
-  $('jitter-label').textContent      = t('jitter');
-  $('packet-loss-label').textContent = t('packetLoss');
+  $('download-latency-label').textContent = t('latency');
+  $('upload-latency-label').textContent   = t('latency');
+  $('download-jitter-label').textContent  = t('jitter');
+  $('upload-jitter-label').textContent    = t('jitter');
+  $('packet-loss-label').textContent      = t('packetLoss');
   $('ip-label').textContent          = t('ip');
   $('connection-label').textContent  = t('connection');
   $('footer-text').textContent       = t('footer');
@@ -242,25 +244,60 @@ $('lang-toggle').addEventListener('click', () => {
 
 /* ── DOM helpers ─────────────────────────────────────────────────────────── */
 function setVal(id, text) { $(id).textContent = text; }
-function setStage(key)    { $('start-text').textContent = t(key); }
+// Tracks which measurement phase the test is in. Read by the ping loop so
+// each ping sample is attributed to the right direction-specific window.
+let currentPhase = 'idle'; // 'idle' | 'ping' | 'download' | 'upload'
+
+function setStage(key) {
+  $('start-text').textContent = t(key);
+  if      (key === 'stagePing') currentPhase = 'ping';
+  else if (key === 'stageDown') currentPhase = 'download';
+  else if (key === 'stageUp')   currentPhase = 'upload';
+  else                          currentPhase = 'idle';
+}
 
 // Arc length of the semicircle (π × r = π × 80). Must match the SVG path.
 const ARC_LENGTH = Math.PI * 80;
 
+// Cached node refs + rAF coalesced writes: setSpeed can fire hundreds of
+// times per second on fast links — batching to one DOM write per animation
+// frame keeps the transition smooth and prevents the needle from "chasing"
+// stale values.
+const gaugeNodes = {};
+const pendingSpeed = { download: null, upload: null };
+let speedRafScheduled = false;
+
+function flushSpeed() {
+  speedRafScheduled = false;
+  for (const prefix of ['download', 'upload']) {
+    const mbps = pendingSpeed[prefix];
+    if (mbps === null) continue;
+    pendingSpeed[prefix] = null;
+
+    const nodes = gaugeNodes[prefix] || (gaugeNodes[prefix] = {
+      speed:  $(prefix + '-speed'),
+      mb:     $(prefix + '-speed-mb'),
+      fill:   $(prefix + '-fill'),
+      needle: $(prefix + '-needle'),
+    });
+
+    nodes.speed.textContent = mbps.toFixed(1);
+    nodes.mb.textContent    = '(' + (mbps / 8).toFixed(1) + ' MB/s)';
+
+    const angle    = gaugeAngle(mbps);
+    const offset   = ARC_LENGTH * (angle / 180);
+    const rotation = 90 - angle;
+
+    nodes.fill.style.strokeDashoffset = String(offset);
+    nodes.needle.setAttribute('transform', `rotate(${rotation} 100 110)`);
+  }
+}
+
 function setSpeed(prefix, mbps) {
-  setVal(prefix + '-speed', mbps.toFixed(1));
-  setVal(prefix + '-speed-mb', '(' + (mbps / 8).toFixed(1) + ' MB/s)');
-
-  const angle    = gaugeAngle(mbps);
-  // arc fill: dashoffset goes from full (empty) to 0 (full)
-  const offset   = ARC_LENGTH * (angle / 180);
-  // needle rotation: gaugeAngle=180 → −90° (left); 90° → 0 (up); 0° → +90° (right)
-  const rotation = 90 - angle;
-
-  $(prefix + '-fill').style.strokeDashoffset = String(offset);
-  $(prefix + '-needle').setAttribute(
-    'transform', `rotate(${rotation} 100 110)`
-  );
+  pendingSpeed[prefix] = mbps;
+  if (speedRafScheduled) return;
+  speedRafScheduled = true;
+  requestAnimationFrame(flushSpeed);
 }
 
 function resetGauges() {
@@ -274,7 +311,11 @@ function resetGauges() {
 
 function resetDisplay() {
   resetGauges();
-  ['latency', 'jitter', 'packet-loss'].forEach(id => setVal(id, '--'));
+  [
+    'packet-loss',
+    'download-latency', 'upload-latency',
+    'download-jitter',  'upload-jitter',
+  ].forEach(id => setVal(id, '--'));
 }
 
 /* ── Stop mechanism ──────────────────────────────────────────────────────── */
@@ -314,24 +355,40 @@ async function pingOnce(signal, seq) {
   }
 }
 
-function renderPingStats(samples) {
-  const { latency, jitter, packetLoss } = windowStats(samples);
-  setVal('latency',     latency.toFixed(1)    + ' ms');
-  setVal('jitter',      jitter.toFixed(1)     + ' ms');
-  setVal('packet-loss', packetLoss.toFixed(1) + ' %');
+function renderPingStats(allSamples, dlSamples, ulSamples) {
+  setVal('packet-loss', windowStats(allSamples).packetLoss.toFixed(1) + ' %');
+
+  // Per-direction latency + jitter — render only once each phase has
+  // produced samples so the previous run's values aren't shown during the
+  // next phase's warmup.
+  if (dlSamples.length > 0) {
+    const dl = windowStats(dlSamples);
+    setVal('download-latency', dl.latency.toFixed(1) + ' ms');
+    setVal('download-jitter',  dl.jitter.toFixed(1)  + ' ms');
+  }
+  if (ulSamples.length > 0) {
+    const ul = windowStats(ulSamples);
+    setVal('upload-latency', ul.latency.toFixed(1) + ' ms');
+    setVal('upload-jitter',  ul.jitter.toFixed(1)  + ' ms');
+  }
 }
 
-// Run a background ping loop until signal is aborted. Returns the final
-// window so callers can compute summary statistics.
+// Run a background ping loop until signal is aborted. Maintains three
+// rolling windows: one for overall latency/loss, and one per direction so
+// jitter is computed only from samples taken during that phase.
 async function runPingLoop(signal) {
-  let samples = [];
+  let allSamples = [];
+  let dlSamples  = [];
+  let ulSamples  = [];
   let seq = 0;
 
   while (!signal.aborted) {
     try {
       const sample = await pingOnce(signal, seq++);
-      samples = pushWindow(samples, sample, PING_WINDOW);
-      renderPingStats(samples);
+      allSamples = pushWindow(allSamples, sample, PING_WINDOW);
+      if      (currentPhase === 'download') dlSamples = pushWindow(dlSamples, sample, PING_WINDOW);
+      else if (currentPhase === 'upload')   ulSamples = pushWindow(ulSamples, sample, PING_WINDOW);
+      renderPingStats(allSamples, dlSamples, ulSamples);
     } catch (e) {
       if (e.name === 'AbortError') break;
       throw e;
@@ -348,7 +405,6 @@ async function runPingLoop(signal) {
       signal.addEventListener('abort', onAbort, { once: true });
     });
   }
-  return samples;
 }
 
 /* ── Download ────────────────────────────────────────────────────────────── */

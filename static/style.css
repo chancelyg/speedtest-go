@@ -1,426 +1,616 @@
-/* ── CSS custom properties ───────────────────────────────────────────────── */
 :root {
-  --bg:           #f0f2f5;
-  --surface:      #ffffff;
-  --surface2:     #f7f8fa;
-  --border:       #e4e7ec;
-  --text:         #1a1d23;
-  --text-muted:   #6b7280;
-  --accent:       #3b82f6;
-  --accent-hover: #2563eb;
-  --bar-bg:       #e0e7ff;
-  --bar-fill:     #3b82f6;
-  --gauge-from:   #60a5fa;
-  --gauge-to:     #2563eb;
-  --shadow:       0 1px 4px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
-  --radius:       16px;
-  --transition:   .25s ease;
+  --bg: #f6f8fb;
+  --surface: #ffffff;
+  --surface-2: #f6f8fb;
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.14);
+  --text: #0a0e1a;
+  --text-muted: #5d6b85;
+  --accent: #635bff;
+  --accent-hover: #4f46e5;
+  --accent-soft: rgba(99, 91, 255, 0.10);
+  --danger: #e0245e;
+  --download-from: #635bff;
+  --download-to: #00d4ff;
+  --upload-from: #7c3aed;
+  --upload-to: #ec4899;
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04),
+                 0 8px 24px -12px rgba(15, 23, 42, 0.12);
+  --shadow-cta: 0 6px 18px rgba(99, 91, 255, 0.35),
+                0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-cta-hover: 0 10px 24px rgba(99, 91, 255, 0.45),
+                     0 1px 2px rgba(15, 23, 42, 0.08);
+  --transition: 200ms ease;
+  --radius: 14px;
+  --radius-sm: 10px;
 }
 
 [data-theme="dark"] {
-  --bg:           #0f1117;
-  --surface:      #1c1f2b;
-  --surface2:     #252836;
-  --border:       #2e3347;
-  --text:         #e8eaf0;
-  --text-muted:   #8b92a5;
-  --accent:       #60a5fa;
-  --accent-hover: #93c5fd;
-  --bar-bg:       #1e2d4d;
-  --bar-fill:     #60a5fa;
-  --gauge-from:   #3b82f6;
-  --gauge-to:     #93c5fd;
-  --shadow:       0 1px 4px rgba(0,0,0,.3), 0 4px 24px rgba(0,0,0,.25);
+  --bg: #0a0e1a;
+  --surface: #131826;
+  --surface-2: #1a2030;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #f6f8fb;
+  --text-muted: #8a96b0;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4),
+                 0 12px 28px -14px rgba(0, 0, 0, 0.7);
+  --shadow-cta: 0 8px 22px rgba(99, 91, 255, 0.45),
+                0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-cta-hover: 0 12px 30px rgba(99, 91, 255, 0.55),
+                     0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
-/* ── Reset ───────────────────────────────────────────────────────────────── */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-               "Helvetica Neue", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter",
+               "Segoe UI", Roboto, "Helvetica Neue",
+               "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
   display: flex;
-  align-items: center;
   justify-content: center;
+  padding: 32px 16px 40px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
   transition: background var(--transition), color var(--transition);
 }
 
-/* ── Layout ──────────────────────────────────────────────────────────────── */
-.container {
+.app {
   width: 100%;
-  max-width: 580px;
-  padding: 24px 20px;
-}
-
-/* ── Header ──────────────────────────────────────────────────────────────── */
-header {
+  max-width: 680px;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+}
+
+/* ── Topbar ────────────────────────────────────────────────────────── */
+
+.topbar {
+  display: flex;
   align-items: center;
-  margin-bottom: 24px;
+  justify-content: space-between;
+  padding: 0 4px 24px;
 }
 
-h1 {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -.4px;
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.controls { display: flex; gap: 8px; }
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--download-to));
+  box-shadow: 0 0 12px rgba(99, 91, 255, 0.6);
+}
 
-.btn-secondary {
-  padding: 6px 14px;
+.topbar h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 14px;
   border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-muted);
   border-radius: 999px;
-  cursor: pointer;
+  background: var(--surface);
+  color: var(--text);
   font-size: 13px;
   font-weight: 500;
-  transition: all var(--transition);
-  white-space: nowrap;
-}
-.btn-secondary:hover {
-  color: var(--accent);
-  border-color: var(--accent);
+  cursor: pointer;
+  transition: border-color var(--transition),
+              background var(--transition);
 }
 
-/* ── Card ────────────────────────────────────────────────────────────────── */
-main {
-  background: var(--surface);
-  border-radius: var(--radius);
-  padding: 36px 32px 28px;
-  box-shadow: var(--shadow);
-  transition: background var(--transition);
+.pill:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
 }
 
-/* ── Speed display (gauges) ──────────────────────────────────────────────── */
-.speed-display {
+.icon-pill {
+  width: 34px;
+  padding: 0;
+  font-size: 15px;
+}
+
+/* ── Stack ─────────────────────────────────────────────────────────── */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Gauges ────────────────────────────────────────────────────────── */
+
+.gauges {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 24px;
+  gap: 16px;
 }
 
-.speed-item {
-  min-width: 0;
+.gauge-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 20px 22px;
+  box-shadow: var(--shadow-card);
   display: flex;
   flex-direction: column;
   align-items: center;
+  position: relative;
+  overflow: hidden;
+  animation: fadeUp 280ms ease-out both;
 }
 
-.speed-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  margin-bottom: 4px;
+.gauge-head {
   align-self: flex-start;
-}
-
-.speed-unit-sub {
-  font-size: 11px;
-  color: var(--text-muted);
-  opacity: .7;
-  font-variant-numeric: tabular-nums;
-  display: block;
-  margin-top: 2px;
-}
-
-/* ── Gauge ───────────────────────────────────────────────────────────────── */
-.gauge {
-  width: 100%;
-  max-width: 240px;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.gauge-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.gauge-card[data-prefix="upload"] .gauge-icon {
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--upload-from);
+}
+
+.gauge-body {
+  width: 100%;
+  max-width: 280px;
+  margin: 10px 0 6px;
 }
 
 .gauge-svg {
   width: 100%;
   height: auto;
+  display: block;
   overflow: visible;
 }
 
 .gauge-track {
   fill: none;
-  stroke: var(--bar-bg);
+  stroke: var(--border);
   stroke-width: 10;
   stroke-linecap: round;
+}
+
+[data-theme="dark"] .gauge-track {
+  stroke: rgba(255, 255, 255, 0.06);
 }
 
 .gauge-fill {
   fill: none;
   stroke-width: 10;
   stroke-linecap: round;
-  /* Arc length = π × 80 ≈ 251.33. Start fully empty. */
-  stroke-dasharray: 251.33;
-  stroke-dashoffset: 251.33;
-  transition: stroke-dashoffset .25s ease-out;
+  stroke-dasharray: 251.327;
+  stroke-dashoffset: 251.327;
+  transition: stroke-dashoffset 80ms linear;
+  will-change: stroke-dashoffset;
 }
 
-.gauge-stop-from { stop-color: var(--gauge-from); }
-.gauge-stop-to   { stop-color: var(--gauge-to);   }
+.gauge-stop-from { stop-color: var(--download-from); }
+.gauge-stop-to   { stop-color: var(--download-to);   }
+.gauge-card[data-prefix="upload"] .gauge-stop-from { stop-color: var(--upload-from); }
+.gauge-card[data-prefix="upload"] .gauge-stop-to   { stop-color: var(--upload-to);   }
+
+.gauge-tick {
+  font-size: 9px;
+  font-weight: 500;
+  fill: var(--text-muted);
+  text-anchor: middle;
+  font-family: inherit;
+}
 
 .gauge-needle {
   stroke: var(--text);
-  stroke-width: 2;
+  stroke-width: 2.4;
   stroke-linecap: round;
-  transform-origin: 100px 110px;
-  transition: transform .25s ease-out;
+  transition: transform 120ms linear;
+  will-change: transform;
 }
 
 .gauge-pivot {
   fill: var(--text);
-  stroke: var(--surface);
-  stroke-width: 2;
 }
 
-.gauge-tick {
-  fill: var(--text-muted);
-  font-size: 8px;
-  font-weight: 500;
-  text-anchor: middle;
-  font-family: inherit;
-  font-variant-numeric: tabular-nums;
+.gauge-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 4px;
 }
 
-/* SVG text variants (gauge-value / gauge-unit are <text> inside <svg>). */
 .gauge-value {
-  fill: var(--accent);
-  font-size: 26px;
-  font-weight: 800;
-  text-anchor: middle;
-  font-family: inherit;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -1px;
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--text);
+  line-height: 1;
 }
 
 .gauge-unit {
-  fill: var(--text-muted);
-  font-size: 9px;
-  font-weight: 500;
-  text-anchor: middle;
-  letter-spacing: 1px;
-  font-family: inherit;
-}
-
-/* ── Metrics grid ────────────────────────────────────────────────────────── */
-.metrics {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-bottom: 28px;
-}
-
-.metric-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 11px 14px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  transition: background var(--transition);
-}
-
-.metric-label {
   font-size: 13px;
   color: var(--text-muted);
+  font-weight: 500;
+}
+
+.gauge-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-height: 16px;
+  margin-top: 4px;
+}
+
+.gauge-stats {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.gauge-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.gauge-stat-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+.gauge-stat-value {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── Metrics strip ─────────────────────────────────────────────────── */
+
+.metrics-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  overflow: hidden;
+  animation: fadeUp 280ms 60ms ease-out both;
+}
+
+.metric {
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border-left: 1px solid var(--border);
+  text-align: center;
+  min-width: 0;
+}
+
+.metric:first-child { border-left: 0; }
+
+.metric-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
 }
 
 .metric-value {
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text);
-  font-variant-numeric: tabular-nums;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* ── Configuration toggle trigger ─────────────────────────────────────── */
+/* ── Config ────────────────────────────────────────────────────────── */
+
+.config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeUp 280ms 120ms ease-out both;
+}
+
 .config-toggle-btn {
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 9px 14px;
-  margin-bottom: 10px;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--text-muted);
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: color var(--transition), border-color var(--transition),
-              background var(--transition);
-  letter-spacing: .2px;
-}
-.config-toggle-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--surface2);
-}
-.config-toggle-btn[aria-expanded="true"] {
-  color: var(--accent);
-  border-color: var(--accent);
-  border-style: solid;
-  background: var(--surface2);
-}
-.config-toggle-chevron {
-  font-size: 11px;
-  transition: transform var(--transition);
-  display: inline-block;
-}
-.config-toggle-btn[aria-expanded="true"] .config-toggle-chevron {
-  transform: rotate(180deg);
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--transition);
+  text-align: left;
+  font-family: inherit;
 }
 
-/* ── Configuration panel ───────────────────────────────────────────────── */
-.config-panel {
-  margin-bottom: 18px;
-  padding: 16px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  transition: background var(--transition);
+.config-toggle-btn:hover {
+  border-color: var(--border-strong);
 }
+
+.config-toggle-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 14px;
+  transition: transform var(--transition);
+}
+
+.config-toggle-btn[aria-expanded="true"] .config-toggle-chevron {
+  transform: rotate(90deg);
+}
+
+.config-panel {
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.config-panel[hidden] { display: none; }
 
 .config-row {
   display: flex;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.config-row:last-child {
-  margin-bottom: 0;
+  gap: 12px;
 }
 
 .config-group {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   min-width: 0;
 }
 
 .config-label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--text-muted);
-  margin-bottom: 6px;
-  letter-spacing: 0.5px;
+  font-weight: 600;
 }
 
 .config-toggle {
-  display: flex;
+  display: inline-flex;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  gap: 2px;
 }
 
 .toggle-btn {
   flex: 1;
-  padding: 8px 12px;
-  border: none;
+  padding: 7px 12px;
+  border: 0;
   background: transparent;
   color: var(--text-muted);
   font-size: 13px;
   font-weight: 500;
+  border-radius: 7px;
   cursor: pointer;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
+  font-family: inherit;
 }
 
 .toggle-btn.active {
   background: var(--accent);
   color: #fff;
-}
-
-.toggle-btn:not(.active):hover {
-  color: var(--accent);
+  box-shadow: 0 1px 3px rgba(99, 91, 255, 0.35);
 }
 
 .config-select {
-  width: 100%;
-  padding: 8px 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  height: 36px;
+  padding: 0 32px 0 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface);
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: border-color var(--transition);
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3e%3cpath fill='none' stroke='%235d6b85' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/%3e%3c/svg%3e");
   background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 30px;
+  background-position: right 12px center;
+  transition: border-color var(--transition), box-shadow var(--transition);
+  font-family: inherit;
 }
+
+[data-theme="dark"] .config-select {
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3e%3cpath fill='none' stroke='%238a96b0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/%3e%3c/svg%3e");
+}
+
+.config-select:hover { border-color: var(--border-strong); }
 
 .config-select:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* ── Action buttons ──────────────────────────────────────────────────────── */
-.btn-row {
+/* ── CTA ───────────────────────────────────────────────────────────── */
+
+.cta {
   display: flex;
-  gap: 10px;
+  gap: 12px;
+  margin-top: 4px;
+  animation: fadeUp 280ms 180ms ease-out both;
 }
 
-/* ── Start button ────────────────────────────────────────────────────────── */
-.btn-primary {
+.btn-primary, .btn-stop {
   flex: 1;
-  padding: 15px;
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 12px;
-  font-size: 16px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background var(--transition), opacity var(--transition);
-  letter-spacing: .3px;
-}
-.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn-primary:disabled { opacity: .55; cursor: not-allowed; }
-
-/* ── Stop button ─────────────────────────────────────────────────────────── */
-.btn-stop {
-  padding: 15px 22px;
-  background: transparent;
-  color: #ef4444;
-  border: 2px solid #ef4444;
+  height: 50px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   border-radius: 12px;
   font-size: 15px;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
-  transition: background var(--transition), color var(--transition),
-              opacity var(--transition);
-  white-space: nowrap;
-  letter-spacing: .2px;
+  border: 0;
+  font-family: inherit;
+  transition: transform var(--transition), box-shadow var(--transition),
+              background var(--transition), color var(--transition);
 }
-.btn-stop:hover { background: #ef4444; color: #fff; }
 
-/* ── Footer ──────────────────────────────────────────────────────────────── */
-footer {
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: #fff;
+  box-shadow: var(--shadow-cta);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-cta-hover);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.92;
+}
+
+.btn-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.btn-primary:disabled .btn-dot {
+  opacity: 1;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.btn-stop {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.btn-stop:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────── */
+
+.footer {
+  margin-top: 28px;
   text-align: center;
-  margin-top: 18px;
   color: var(--text-muted);
   font-size: 12px;
 }
 
-/* ── Responsive ──────────────────────────────────────────────────────────── */
-@media (max-width: 460px) {
-  main { padding: 24px 18px 20px; }
+.footer p { margin: 0; }
 
-  .speed-display { grid-template-columns: 1fr; gap: 8px; }
+/* ── Animations ────────────────────────────────────────────────────── */
 
-  .gauge-value { font-size: 26px; }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
-  .metrics { grid-template-columns: 1fr; }
+@keyframes pulse {
+  0%, 100% { transform: scale(1);    opacity: 1;   }
+  50%      { transform: scale(0.55); opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+}
+
+/* ── Responsive ────────────────────────────────────────────────────── */
+
+@media (max-width: 520px) {
+  body { padding: 20px 12px 32px; }
+
+  .topbar { padding-bottom: 18px; }
+
+  .gauges { grid-template-columns: 1fr; }
+
+  .gauge-value { font-size: 36px; }
+
+  .metrics-card { grid-template-columns: 1fr; }
+
+  .metric { border-left: 0; }
+  .metric + .metric { border-top: 1px solid var(--border); }
+
+  .config-row { flex-direction: column; gap: 12px; }
 }
