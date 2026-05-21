@@ -794,10 +794,11 @@ function collectFinalResult() {
   const dlJitter       = parseDomNumber('download-jitter');
   const ulJitter       = parseDomNumber('upload-jitter');
   // F1 may not have shipped yet — fall back to "" so the schema stays valid.
+  // F1 renders the grade as "A (+1 ms)" / "B (+27 ms)" / etc, so we extract
+  // the leading letter rather than requiring an exact one-char match.
   const gradeEl        = document.getElementById('bufferbloat-grade');
-  const grade          = (gradeEl && /^[A-D]$/.test(gradeEl.textContent.trim()))
-    ? gradeEl.textContent.trim()
-    : '';
+  const gradeMatch     = gradeEl?.textContent?.trim().match(/^([A-D])\b/);
+  const grade          = gradeMatch ? gradeMatch[1] : '';
   // "Idle" baseline is the minimum of the two per-direction averages —
   // when F1 isn't shipped we just use the smaller of dl/ul latency.
   const idleLatency    = Math.min(

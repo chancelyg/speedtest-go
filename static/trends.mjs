@@ -158,7 +158,10 @@ export function mountTrends(containerEl, opts = {}) {
       b.type = 'button';
       b.className = 'trends-window-btn';
       b.dataset.window = key;
-      b.textContent = t(`win${key.toUpperCase()}`);
+      // STRINGS uses lowercase keys (win24h / win7d / win30d) so we don't
+      // uppercase here — toUpperCase would yield "win24H" which has no match
+      // and the raw key would leak into the UI.
+      b.textContent = t(`win${key}`);
       if (key === currentWindow) b.classList.add('active');
       b.addEventListener('click', () => { setWindow(key).catch(() => {}); });
       winToggle.appendChild(b);
