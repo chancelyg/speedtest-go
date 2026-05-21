@@ -18,12 +18,18 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
+    # Inject version metadata into main package vars (Track C wires these up
+    # as `var version, commit, date string` at the top of main.go).
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .CommitDate }}
 
 archives:
   - id: speedtest
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # tar.gz everywhere except Windows, which gets zip for usability.
     format: tar.gz
     format_overrides:
       - goos: windows
@@ -35,6 +41,82 @@ archives:
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
+
+# Detached GPG signature over the SHA256 checksums file. We sign the
+# checksum file (not every artifact) because:
+#   1. The checksum file already commits to every artifact's hash, so one
+#      signature transitively authenticates all of them.
+#   2. Signing each archive doubles the asset count on the release page and
+#      forces verifiers to do N signature checks instead of one.
+#   3. This matches the convention used by Hashicorp, Caddy, kubectl, etc.
+# Requires the CI workflow to import a private key whose fingerprint is in
+# the GPG_FINGERPRINT secret. Local `goreleaser release --snapshot` skips
+# signing automatically when the env var is unset.
+signs:
+  - id: checksum
+    cmd: gpg
+    args:
+      - "--batch"
+      - "-u"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+    artifacts: checksum
+
+# CycloneDX SBOMs for the binary archives and the source tarball. syft is
+# expected to be on PATH in the release workflow.
+sboms:
+  - id: archive
+    artifacts: archive
+  - id: source
+    artifacts: source
+
+# Multi-arch container images pushed to GHCR. amd64 and arm64 are built
+# separately then stitched together via a manifest list so `docker pull
+# ghcr.io/<repo>:<tag>` resolves to the right arch automatically.
+dockers:
+  - id: speedtest-amd64
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:latest-amd64"
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+  - id: speedtest-arm64
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-arm64"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:latest-arm64"
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_REPOSITORY }}"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+
+docker_manifests:
+  - name_template: "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:latest"
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:latest-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}:latest-arm64"
 
 release:
   github:

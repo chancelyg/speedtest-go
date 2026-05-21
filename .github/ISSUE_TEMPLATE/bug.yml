@@ -1,18 +1,85 @@
-# Phase 4 Track E — agent E to flesh out into a structured bug form.
 name: Bug report
-description: Something is broken
+description: Report something that is broken or behaves unexpectedly.
+title: "bug: <short summary>"
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please fill in the
+        fields below so we can reproduce the issue quickly.
+
+        **Security issues should NOT be filed here** - see
+        [SECURITY.md](../SECURITY.md) for the private reporting channel.
+
   - type: textarea
     id: what-happened
     attributes:
       label: What happened?
-      description: Steps to reproduce, expected behaviour, observed behaviour.
+      description: |
+        Describe the bug.
+        - What were you trying to do?
+        - What did you expect to happen?
+        - What actually happened?
     validations:
       required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Minimal, ordered steps that someone else can follow to see the
+        bug. Include the exact `curl` / browser action / config used.
+      placeholder: |
+        1. Start the server with `SPEEDTEST_PORT=8080 ./speedtest`
+        2. Open http://localhost:8080 in Chrome 124
+        3. Click "Start test"
+        4. Observe ...
+    validations:
+      required: true
+
   - type: input
     id: version
     attributes:
-      label: speedtest-go version (./speedtest --version)
+      label: speedtest-go version
+      description: Output of `./speedtest --version`, or the commit SHA you built from.
+      placeholder: "v0.x.y  (or commit a3d1547)"
     validations:
       required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        OS, kernel, Go version (if building from source), reverse proxy
+        (if any), container runtime (if any).
+      placeholder: |
+        - OS: Ubuntu 24.04 LTS (x86_64)
+        - Kernel: 6.8.0-31-generic
+        - Go: 1.24.1 (only if you built from source)
+        - Reverse proxy: Caddy 2.8 / nginx 1.27 / none
+        - Container: docker 26.0 / podman / none
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: |
+        Paste server logs (`journalctl -u speedtest`, `docker logs`,
+        stdout/stderr), browser-console errors, or `curl -v` output.
+        Use code fences to preserve formatting. Redact anything sensitive.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I am running a supported version (see SECURITY.md).
+          required: true

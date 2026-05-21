@@ -193,6 +193,71 @@ sudo certbot --nginx -d speedtest.example.com
 # 自动续期已配置，无需手动操作
 ```
 
+### 6. Caddy（auto-TLS）
+
+[Caddy](https://caddyserver.com/) 是一个零配置即可自动从 Let's Encrypt
+申请并续期证书的反向代理，适合不想手动维护 nginx + certbot 的场景。
+
+最简 `Caddyfile`（自动启用 HTTPS）：
+
+```caddyfile
+speedtest.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+只要域名 A/AAAA 记录指向运行 Caddy 的主机、80/443 端口可达，Caddy 会
+自动完成 ACME 挑战、获取证书并在到期前续期。无需额外脚本。
+
+#### 屏蔽 `/healthz` 与 `/metrics`
+
+`/healthz` 与 Prometheus `/metrics` 不应该暴露在公网上 —— 它们包含运行
+时统计信息，并且 `/metrics` 是高频抓取目标，容易被滥用为带宽放大入口。
+下面的 Caddyfile 将这两个路径限制到内网 CIDR：
+
+```caddyfile
+speedtest.example.com {
+    # 内部路径仅允许 RFC1918 网段访问；其余路径走正常反代。
+    @internal path /healthz /metrics
+    handle @internal {
+        @allowed remote_ip 10.0.0.0/8 192.168.0.0/16 172.16.0.0/12
+        handle @allowed {
+            reverse_proxy 127.0.0.1:8080
+        }
+        respond 403
+    }
+
+    reverse_proxy 127.0.0.1:8080
+
+    # 上传测速默认 body 限制是 10 GB（由 binary 自身的
+    # MaxBytesReader 控制），Caddy 不需要再设额外上限。
+}
+```
+
+#### systemd 单元（运行 Caddy + speedtest）
+
+如果两者都跑在同一台机器，建议各自一个 systemd 单元，便于独立重启。
+speedtest 的单元已经在前面 "2. Systemd 服务" 给出；Caddy 通常由其官方
+deb / rpm 包提供 `caddy.service`，安装后只需：
+
+```bash
+sudo systemctl enable --now caddy
+sudo systemctl reload caddy   # 修改 Caddyfile 后热重载，不会中断现有连接
+```
+
+#### 验证
+
+```bash
+# TLS 握手成功且证书来自 Let's Encrypt
+curl -vI https://speedtest.example.com
+
+# 公网访问 /metrics 应该返回 403
+curl -sI https://speedtest.example.com/metrics
+
+# 内网（10.0.0.0/8 等）访问 /metrics 应该返回 200
+curl -sI http://<内网 IP>:8080/metrics
+```
+
 ## 防火墙配置
 
 ### UFW（Ubuntu/Debian）

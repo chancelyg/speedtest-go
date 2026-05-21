@@ -1,5 +1,24 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#5b6cff"/>
-  <text x="256" y="318" font-family="-apple-system, system-ui, sans-serif" font-size="170" font-weight="700"
-        text-anchor="middle" fill="#fff">ST</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Same composition as favicon-192.svg, scaled to 512.
+       Geometry kept inside the central 80% safe zone so maskable cropping
+       (Android adaptive icons) never clips the gauge or arrows. -->
+  <rect width="512" height="512" rx="88" ry="88" fill="#0b1220"/>
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <!-- Gauge arc. -->
+  <path d="M 128 332 A 128 128 0 0 1 384 332"
+        fill="none" stroke="#1f2937" stroke-width="36" stroke-linecap="round"/>
+  <path d="M 128 332 A 128 128 0 0 1 352 256"
+        fill="none" stroke="url(#g)" stroke-width="36" stroke-linecap="round"/>
+  <!-- Needle. -->
+  <line x1="256" y1="332" x2="332" y2="208"
+        stroke="#e2e8f0" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="256" cy="332" r="22" fill="#e2e8f0"/>
+  <!-- Up/down chevrons. -->
+  <path d="M 186 416 L 214 384 L 242 416" fill="none" stroke="#22d3ee" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 270 384 L 298 416 L 326 384" fill="none" stroke="#6366f1" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

@@ -1,24 +1,55 @@
-# Phase 4 Track E — agent E to flesh out.
 name: Feature request
-description: Propose a change or addition
+description: Propose a new feature or behaviour change.
+title: "feat: <short summary>"
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Please describe the problem you're
+        trying to solve before describing the solution - it helps us
+        evaluate alternatives.
+
   - type: textarea
     id: problem
     attributes:
       label: Problem
-      description: What problem does this solve?
+      description: |
+        What problem does this solve? What use case is currently
+        awkward, impossible, or unsafe?
     validations:
       required: true
+
   - type: textarea
     id: proposal
     attributes:
       label: Proposed solution
+      description: |
+        Describe the change you'd like. Include API shapes, env vars,
+        CLI flags, UI behaviour, etc. where relevant.
     validations:
       required: true
+
+  - type: textarea
+    id: alternatives_considered
+    attributes:
+      label: Alternatives considered
+      description: |
+        What other approaches did you weigh? Why did you reject them?
+        This helps us avoid re-litigating already-considered options.
+    validations:
+      required: false
+
   - type: checkboxes
     id: boundary
     attributes:
       label: Single-binary / zero-dependency boundary
+      description: |
+        speedtest-go ships as one static Go binary with the frontend
+        embedded via `//go:embed`. See [CONTRIBUTING.md](../CONTRIBUTING.md)
+        and `SPEC.md` for the invariants.
       options:
-        - label: My proposal does not add a new Go module or frontend build step
+        - label: My proposal does not add a new Go module dependency.
+        - label: My proposal does not add a frontend build pipeline (npm, bundler, preprocessor).
+        - label: My proposal does not require an external API, CDN, or sidecar service at runtime.
+        - label: If any of the boxes above are unchecked, I have explained the trade-off in the proposal above.
