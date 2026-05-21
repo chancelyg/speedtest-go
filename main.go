@@ -16,6 +16,7 @@ import (
 
 	"speedtest-go/internal/config"
 	"speedtest-go/internal/handler"
+	"speedtest-go/internal/store"
 )
 
 //go:embed static
@@ -49,11 +50,39 @@ func main() {
 		"listen", cfg.Addr(),
 	)
 
-	srv := newServer(cfg)
+	// Open the SQLite history store when configured. The store is *optional*:
+	// if SPEEDTEST_DB_PATH is empty we skip opening, and if Open() fails we
+	// log a warning and continue in stateless mode rather than refusing to
+	// start the server. Speed-testing must still work without persistence.
+	var historyStore store.Store
+	if cfg.DBPath != "" {
+		s, err := store.Open(cfg.DBPath)
+		if err != nil {
+			slog.Warn("history disabled", "db_path", cfg.DBPath, "err", err.Error())
+		} else {
+			historyStore = s
+			slog.Info("history enabled", "db_path", cfg.DBPath)
+			if cfg.HistoryRetentionDays > 0 {
+				cutoff := time.Now().Add(-time.Duration(cfg.HistoryRetentionDays) * 24 * time.Hour).UnixMilli()
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				n, perr := historyStore.PruneOlderThan(ctx, cutoff)
+				cancel()
+				if perr != nil {
+					slog.Warn("history prune failed", "err", perr.Error())
+				} else if n > 0 {
+					slog.Info("history pruned", "rows", n, "older_than_days", cfg.HistoryRetentionDays)
+				}
+			}
+		}
+	}
+
+	srv := newServerWithStore(cfg, historyStore)
 
 	// Graceful shutdown: wait for SIGINT or SIGTERM, then drain in-flight
 	// connections with a 30-second deadline so ongoing speed-test streams
-	// can complete rather than being abruptly cut.
+	// can complete rather than being abruptly cut. The history store is
+	// closed *after* Shutdown returns so handlers can still write the final
+	// in-flight POST /api/results body.
 	idleConnsClosed := make(chan struct{})
 	go func() {
 		sigch := make(chan os.Signal, 1)
@@ -64,6 +93,11 @@ func main() {
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("shutdown error", "err", err.Error())
+		}
+		if historyStore != nil {
+			if err := historyStore.Close(); err != nil {
+				slog.Error("store close error", "err", err.Error())
+			}
 		}
 		close(idleConnsClosed)
 	}()
@@ -77,8 +111,9 @@ func main() {
 	slog.Info("server stopped")
 }
 
-// newServer constructs the speedtest HTTP server with timeouts tuned for
-// long-running download/upload streams.
+// newServer constructs the speedtest HTTP server with no history store
+// configured. Retained for the existing TestServerAllowsLongUploadsAndDownloads
+// test which only needs the timeout contract.
 //
 //   - ReadHeaderTimeout protects against slow-header (slowloris) attacks.
 //   - ReadTimeout is intentionally disabled because size-mode uploads of
@@ -88,9 +123,15 @@ func main() {
 //     response side (time-mode downloads stream for up to 5 minutes).
 //   - IdleTimeout reaps keep-alive connections between requests.
 func newServer(cfg *config.Config) *http.Server {
+	return newServerWithStore(cfg, nil)
+}
+
+// newServerWithStore is the full constructor used by main(). Tests that need
+// the history endpoints wired in pass a non-nil store.
+func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
 	return &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           loggingMiddleware(buildMux(cfg)),
+		Handler:           loggingMiddleware(buildMux(cfg, s)),
 		ReadHeaderTimeout: 30 * time.Second,
 		ReadTimeout:       0,
 		WriteTimeout:      0,
@@ -98,8 +139,8 @@ func newServer(cfg *config.Config) *http.Server {
 	}
 }
 
-func buildMux(cfg *config.Config) *http.ServeMux {
-	h := handler.New(cfg)
+func buildMux(cfg *config.Config, s store.Store) *http.ServeMux {
+	h := handler.New(cfg, s)
 	mux := http.NewServeMux()
 
 	// Static assets embedded in the binary.
@@ -114,12 +155,25 @@ func buildMux(cfg *config.Config) *http.ServeMux {
 	// fall back to the default icon embedded in static/favicon.ico.
 	mux.HandleFunc("/favicon.ico", faviconHandler(sub))
 
-	// API
+	// API — speed test endpoints.
 	mux.HandleFunc("/api/config", h.ConfigHandler)
 	mux.HandleFunc("/api/ip", h.IPHandler)
 	mux.HandleFunc("/api/ping", h.PingHandler)
 	mux.HandleFunc("/api/download", h.DownloadHandler)
 	mux.HandleFunc("/api/upload", h.UploadHandler)
+
+	// Health probe — always wired; respects history availability.
+	mux.HandleFunc("/healthz", h.HealthHandler)
+
+	// Results history. Order matters: more-specific paths must be registered
+	// before /api/results/ which would otherwise eat them. Go's ServeMux
+	// picks the longest matching pattern, so explicit /api/results/range and
+	// /api/results/export win over /api/results/ — but we register them
+	// first as a defense in depth.
+	mux.HandleFunc("/api/results/range", h.ResultsRange)
+	mux.HandleFunc("/api/results/export", h.ResultsExport)
+	mux.HandleFunc("/api/results", h.ResultsListOrCreate)
+	mux.HandleFunc("/api/results/", h.ResultsByID)
 
 	return mux
 }

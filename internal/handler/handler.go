@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"speedtest-go/internal/config"
+	"speedtest-go/internal/store"
 )
 
 // payloadSize is the size of the shared random buffer streamed for downloads.
@@ -47,43 +49,69 @@ type Handler struct {
 	cfg *config.Config
 	// sem limits the number of concurrent active download/upload tests.
 	sem chan struct{}
+
+	// store is the optional persistence backend. When nil, history-related
+	// endpoints return 503 and historyEnabled() reports false. Keeping the
+	// dependency optional lets the server run in stateless mode without a
+	// writable filesystem.
+	store store.Store
+
+	// startedAt is captured at New() time so /healthz can report uptime.
+	startedAt time.Time
+
+	// acceptedTotal counts download+upload tests that successfully reserved
+	// a semaphore slot; rejectedTotal counts those rejected with 503.
+	acceptedTotal atomic.Int64
+	rejectedTotal atomic.Int64
 }
 
-// New creates a Handler bound to the given configuration.
+// New creates a Handler bound to the given configuration. The store argument
+// may be nil to disable history persistence entirely; callers that want
+// history must pass a non-nil store.Store.
+//
 // If cfg.MaxConcurrent is zero (e.g. in tests that build Config directly),
 // a default of 10 is used so the semaphore is always functional.
-func New(cfg *config.Config) *Handler {
+func New(cfg *config.Config, s store.Store) *Handler {
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
 		maxConcurrent = 10
 	}
 	return &Handler{
-		cfg: cfg,
-		sem: make(chan struct{}, maxConcurrent),
+		cfg:       cfg,
+		sem:       make(chan struct{}, maxConcurrent),
+		store:     s,
+		startedAt: time.Now(),
 	}
 }
 
 // acquire tries to take a slot from the concurrency semaphore.
 // Returns true on success, false when the server is at capacity.
+// On success acceptedTotal is incremented; on failure rejectedTotal is.
 func (h *Handler) acquire() bool {
 	select {
 	case h.sem <- struct{}{}:
+		h.acceptedTotal.Add(1)
 		return true
 	default:
+		h.rejectedTotal.Add(1)
 		return false
 	}
 }
 
 func (h *Handler) release() { <-h.sem }
 
+// historyEnabled reports whether the persistence backend is active.
+// Exposed to /api/config so the frontend can hide history UI when off.
+func (h *Handler) historyEnabled() bool { return h.store != nil }
+
 // ── /api/config ───────────────────────────────────────────────────────────
 
 type configResponse struct {
-	Mode         string `json:"mode"`
-	DurationSecs int    `json:"durationSecs"`
-	DownloadMB   int    `json:"downloadMB"`
-	UploadMB     int    `json:"uploadMB"`
-	Streams      int    `json:"streams"`
+	Mode           string `json:"mode"`
+	DurationSecs   int    `json:"durationSecs"`
+	DownloadMB     int    `json:"downloadMB"`
+	UploadMB       int    `json:"uploadMB"`
+	Streams        int    `json:"streams"`
 	// Phase 2-3 additions — let the frontend tailor its behaviour:
 	//   warmupMs:       milliseconds of throughput samples F1 should discard
 	//                   at the start of download/upload (slow-start trim).
@@ -110,11 +138,6 @@ func (h *Handler) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 		HistoryEnabled: h.historyEnabled(),
 	})
 }
-
-// historyEnabled reports whether the SQLite-backed history store is wired up.
-// B1 must flip this to consult the actual store handle once internal/store is
-// in place. Until then it stays false so the frontend hides History/Trends UI.
-func (h *Handler) historyEnabled() bool { return false }
 
 // ── /api/ip ───────────────────────────────────────────────────────────────
 

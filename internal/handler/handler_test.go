@@ -65,7 +65,7 @@ func timeCfg(secs int) *config.Config {
 
 func TestConfigHandlerSizeMode(t *testing.T) {
 	cfg := sizeCfg(25, 10)
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
@@ -92,7 +92,7 @@ func TestConfigHandlerSizeMode(t *testing.T) {
 
 func TestConfigHandlerTimeMode(t *testing.T) {
 	cfg := timeCfg(15)
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
 	w := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestConfigHandlerTimeMode(t *testing.T) {
 // ── /api/ip ────────────────────────────────────────────────────────────────
 
 func TestIPHandlerReturnsJSON(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/ip", nil)
 	req.RemoteAddr = "1.2.3.4:5678"
 	w := httptest.NewRecorder()
@@ -133,7 +133,7 @@ func TestIPHandlerReturnsJSON(t *testing.T) {
 }
 
 func TestIPHandlerXForwardedFor(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/ip", nil)
 	req.RemoteAddr = "10.0.0.1:9999"
 	req.Header.Set("X-Forwarded-For", "203.0.113.5, 10.0.0.1")
@@ -148,7 +148,7 @@ func TestIPHandlerXForwardedFor(t *testing.T) {
 }
 
 func TestIPHandlerXRealIP(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/ip", nil)
 	req.RemoteAddr = "10.0.0.1:9999"
 	req.Header.Set("X-Real-Ip", "198.51.100.7")
@@ -165,7 +165,7 @@ func TestIPHandlerXRealIP(t *testing.T) {
 // ── /api/download (size mode) ──────────────────────────────────────────────
 
 func TestDownloadHandlerSizeModeDefaultSize(t *testing.T) {
-	h := handler.New(sizeCfg(10, 10))
+	h := handler.New(sizeCfg(10, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/download", nil)
 	w := httptest.NewRecorder()
 	h.DownloadHandler(w, req)
@@ -178,7 +178,7 @@ func TestDownloadHandlerSizeModeDefaultSize(t *testing.T) {
 }
 
 func TestDownloadHandlerSizeModeHonorsBytesOverride(t *testing.T) {
-	h := handler.New(sizeCfg(10, 10))
+	h := handler.New(sizeCfg(10, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/download?bytes=1234567", nil)
 	w := httptest.NewRecorder()
 	h.DownloadHandler(w, req)
@@ -193,7 +193,7 @@ func TestDownloadHandlerSizeModeHonorsBytesOverride(t *testing.T) {
 }
 
 func TestDownloadHandlerSizeModeContentType(t *testing.T) {
-	h := handler.New(sizeCfg(1, 1))
+	h := handler.New(sizeCfg(1, 1), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/download", nil)
 	w := httptest.NewRecorder()
 	h.DownloadHandler(w, req)
@@ -204,7 +204,7 @@ func TestDownloadHandlerSizeModeContentType(t *testing.T) {
 }
 
 func TestDownloadHandlerNoCachingHeaders(t *testing.T) {
-	h := handler.New(sizeCfg(1, 1))
+	h := handler.New(sizeCfg(1, 1), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/download", nil)
 	w := httptest.NewRecorder()
 	h.DownloadHandler(w, req)
@@ -220,7 +220,7 @@ func TestDownloadHandlerNoCachingHeaders(t *testing.T) {
 // crypto/rand makes the download CPU-bound on gigabit+ links and distorts
 // throughput measurement.
 func TestDownloadPayloadIsDeterministic(t *testing.T) {
-	h := handler.New(sizeCfg(1, 1))
+	h := handler.New(sizeCfg(1, 1), nil)
 
 	fetch := func() []byte {
 		req := httptest.NewRequest(http.MethodGet, "/api/download?bytes=131072", nil)
@@ -246,7 +246,7 @@ func TestDownloadPayloadIsDeterministic(t *testing.T) {
 // incompressible-equivalent in this test but is wrong). A simple way to
 // detect "all zero" without false positives: count distinct byte values.
 func TestDownloadPayloadIsHighEntropy(t *testing.T) {
-	h := handler.New(sizeCfg(1, 1))
+	h := handler.New(sizeCfg(1, 1), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/download?bytes=65536", nil)
 	w := httptest.NewRecorder()
 	h.DownloadHandler(w, req)
@@ -271,7 +271,7 @@ func TestDownloadPayloadIsHighEntropy(t *testing.T) {
 
 func TestDownloadHandlerTimeModeStreamsForDuration(t *testing.T) {
 	cfg := timeCfg(2) // 2-second test
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download", nil)
 	w := newCountingWriter()
@@ -292,7 +292,7 @@ func TestDownloadHandlerTimeModeStreamsForDuration(t *testing.T) {
 
 func TestDownloadHandlerTimeModeWritesData(t *testing.T) {
 	cfg := timeCfg(1)
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download", nil)
 	w := newCountingWriter()
@@ -307,7 +307,7 @@ func TestDownloadHandlerTimeModeWritesData(t *testing.T) {
 // ── /api/upload ────────────────────────────────────────────────────────────
 
 func TestUploadHandlerAcceptsPOST(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	payload := strings.Repeat("x", 1024*1024)
 	req := httptest.NewRequest(http.MethodPost, "/api/upload", strings.NewReader(payload))
 	w := httptest.NewRecorder()
@@ -322,7 +322,7 @@ func TestUploadHandlerAcceptsPOST(t *testing.T) {
 }
 
 func TestUploadHandlerRejectsGET(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/upload", nil)
 	w := httptest.NewRecorder()
 	h.UploadHandler(w, req)
@@ -333,7 +333,7 @@ func TestUploadHandlerRejectsGET(t *testing.T) {
 }
 
 func TestUploadHandlerReturnsBytesReceived(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	size := 512 * 1024
 	payload := strings.Repeat("z", size)
 	req := httptest.NewRequest(http.MethodPost, "/api/upload", strings.NewReader(payload))
@@ -350,7 +350,7 @@ func TestUploadHandlerReturnsBytesReceived(t *testing.T) {
 // ── /api/ping ──────────────────────────────────────────────────────────────
 
 func TestPingHandlerReturnsOK(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
 	w := httptest.NewRecorder()
 	h.PingHandler(w, req)
@@ -361,7 +361,7 @@ func TestPingHandlerReturnsOK(t *testing.T) {
 }
 
 func TestPingHandlerBodyIsMinimal(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
 	w := httptest.NewRecorder()
 	h.PingHandler(w, req)
@@ -373,7 +373,7 @@ func TestPingHandlerBodyIsMinimal(t *testing.T) {
 }
 
 func TestPingHandlerNoCachingHeaders(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/ping", nil)
 	w := httptest.NewRecorder()
 	h.PingHandler(w, req)
@@ -436,7 +436,7 @@ func TestSemaphoreFullReturns503ForDownload(t *testing.T) {
 		UploadMB:      10,
 		MaxConcurrent: 2,
 	}
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	// Wrap in a mux so we can serve through a real test server.
 	mux := http.NewServeMux()
@@ -493,7 +493,7 @@ func TestSemaphoreFullReturns503ForDownload(t *testing.T) {
 // open (holding the semaphore slot) until after the 503 assertion.
 func TestSemaphoreFullReturns503ForUpload(t *testing.T) {
 	cfg := concurrentCfg(2)
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	holdDone := make(chan struct{}, 2)
 	pipes := make([]*io.PipeWriter, 2)
@@ -589,7 +589,7 @@ func TestProxyHeaderSpoofingRejected(t *testing.T) {
 // TestMethodRejectionOnConfigEndpoint verifies that non-GET methods on
 // /api/config return 405 Method Not Allowed.
 func TestMethodRejectionOnConfigEndpoint(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	for _, method := range []string{
 		http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch,
 	} {
@@ -607,7 +607,7 @@ func TestMethodRejectionOnConfigEndpoint(t *testing.T) {
 // TestMethodRejectionOnIPEndpoint verifies that non-GET methods on /api/ip
 // return 405 Method Not Allowed.
 func TestMethodRejectionOnIPEndpoint(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	for _, method := range []string{
 		http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch,
 	} {
@@ -625,7 +625,7 @@ func TestMethodRejectionOnIPEndpoint(t *testing.T) {
 // TestMethodRejectionOnPingEndpoint verifies that non-GET methods on
 // /api/ping return 405 Method Not Allowed.
 func TestMethodRejectionOnPingEndpoint(t *testing.T) {
-	h := handler.New(sizeCfg(25, 10))
+	h := handler.New(sizeCfg(25, 10), nil)
 	for _, method := range []string{
 		http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch,
 	} {
@@ -672,7 +672,7 @@ func TestStatusWriterImplementsFlusher(t *testing.T) {
 		UploadMB:      10,
 		MaxConcurrent: 5,
 	}
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/download", h.DownloadHandler)
@@ -720,7 +720,7 @@ func (f *flushCountingWriter) Flush() {
 // server's default Duration).
 func TestDownloadDurationOverride(t *testing.T) {
 	cfg := timeCfg(60) // server default = 60 s — we override to 1 s
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download?duration=1", nil)
 	w := newCountingWriter()
@@ -744,7 +744,7 @@ func TestDownloadDurationOverride(t *testing.T) {
 // above maxDurationSecs (300) falls back to the server's configured Duration.
 func TestDownloadDurationOverrideTooLarge(t *testing.T) {
 	cfg := timeCfg(1) // server default = 1 s
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	// 9999 > maxDurationSecs, should be ignored and server uses 1 s.
 	req := httptest.NewRequest(http.MethodGet, "/api/download?duration=9999", nil)
@@ -762,7 +762,7 @@ func TestDownloadDurationOverrideTooLarge(t *testing.T) {
 // the server falls back to its configured Duration.
 func TestDownloadDurationOverrideZero(t *testing.T) {
 	cfg := timeCfg(1) // server default = 1 s
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/download?duration=0", nil)
 	w := newCountingWriter()
@@ -779,7 +779,7 @@ func TestDownloadDurationOverrideZero(t *testing.T) {
 // when the server is in size mode (the ?bytes parameter governs transfer size).
 func TestDownloadDurationIgnoredInSizeMode(t *testing.T) {
 	cfg := sizeCfg(1, 1) // 1 MB download
-	h := handler.New(cfg)
+	h := handler.New(cfg, nil)
 
 	// Even with duration=60, size-mode should finish quickly.
 	req := httptest.NewRequest(http.MethodGet, "/api/download?bytes=1024&duration=60", nil)

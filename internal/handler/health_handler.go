@@ -1,17 +1,40 @@
 package handler
 
-// Health endpoint skeleton — to be implemented by Phase 2-3 agent B1.
+import (
+	"net/http"
+	"time"
+)
+
+// healthResponse is the JSON shape returned by /healthz. Field names match
+// the Prometheus-style snake_case convention so the same payload can be
+// scraped by ops tooling.
+type healthResponse struct {
+	Status         string `json:"status"`
+	UptimeSec      int64  `json:"uptime_sec"`
+	ActiveTests    int    `json:"active_tests"`
+	AcceptedTotal  int64  `json:"accepted_total"`
+	RejectedTotal  int64  `json:"rejected_total"`
+	HistoryEnabled bool   `json:"history_enabled"`
+}
+
+// HealthHandler serves GET /healthz and reports a tiny operational snapshot:
+// the current uptime, how many concurrent tests are running, and the total
+// number of tests accepted vs. rejected since the process started.
 //
-// Target: GET /healthz returns JSON:
-//
-//	{
-//	  "status":          "ok",
-//	  "uptime_sec":      12345,
-//	  "active_tests":    int,   // currently-running download/upload tests
-//	  "accepted_total":  int,   // cumulative tests admitted (sem acquire ok)
-//	  "rejected_total":  int    // cumulative tests rejected with 503
-//	}
-//
-// The active_tests counter comes from len(h.sem); accepted/rejected counters
-// must be added to Handler as atomic int64 fields and incremented in the
-// existing acquire()/DownloadHandler/UploadHandler 503 paths (handler.go).
+// The endpoint is read-only and rejects every non-GET method with 405 so it
+// cannot be abused as a write surface.
+func (h *Handler) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, healthResponse{
+		Status:         "ok",
+		UptimeSec:      int64(time.Since(h.startedAt).Seconds()),
+		ActiveTests:    len(h.sem),
+		AcceptedTotal:  h.acceptedTotal.Load(),
+		RejectedTotal:  h.rejectedTotal.Load(),
+		HistoryEnabled: h.historyEnabled(),
+	})
+}
