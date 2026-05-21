@@ -1,6 +1,7 @@
 'use strict';
 
 import { gaugeAngle, windowStats, pushWindow, throughputMbps } from './metrics.mjs';
+import { mountToast } from './toast.mjs';
 
 /* ── i18n ────────────────────────────────────────────────────────────────── */
 const i18n = {
@@ -32,6 +33,10 @@ const i18n = {
     mb:           'MB',
     cfgHint:      '点击展开测试设置',
     cfgHintOpen:  '收起测试设置',
+    serverBusy:   '服务器繁忙，请稍后',
+    networkError: '网络中断',
+    unknownError: '未知错误',
+    retry:        '重试',
   },
   en: {
     title:        'Speedtest',
@@ -61,6 +66,10 @@ const i18n = {
     mb:           'MB',
     cfgHint:      'Click to expand test settings',
     cfgHintOpen:  'Collapse test settings',
+    serverBusy:   'Server busy, please retry',
+    networkError: 'Network error',
+    unknownError: 'Unknown error',
+    retry:        'Retry',
   },
 };
 
@@ -162,6 +171,24 @@ function applyConfigToUI(cfg) {
 
 const t = key => i18n[lang][key] ?? key;
 const $ = id  => document.getElementById(id);
+
+/* ── Toast (error feedback) ──────────────────────────────────────────────── */
+// `showToast` is initialised on DOMContentLoaded (container must exist).
+// Until then calls fall back to console.warn so early bootstrap errors are
+// not swallowed.
+let showToast = (msg, level) => console.warn(`[toast:${level}] ${msg}`);
+
+// Classify a failed fetch into a toast message. Used at every API call site
+// so the user always knows why a measurement didn't run. We deliberately
+// avoid showing toasts for user-initiated aborts (the Stop button).
+function toastForFetchError(err, status) {
+  if (err && err.name === 'AbortError') return null;       // user-cancelled
+  if (status === 503)                   return { msg: t('serverBusy'), level: 'warn' };
+  if (status && status >= 500)          return { msg: t('unknownError'), level: 'error' };
+  // TypeError from fetch() === network layer failure (DNS, offline, TLS, …).
+  if (err instanceof TypeError)         return { msg: t('networkError'), level: 'error' };
+  return { msg: t('unknownError'), level: 'error' };
+}
 
 /* ── Theme ───────────────────────────────────────────────────────────────── */
 (function initTheme() {
@@ -340,6 +367,11 @@ $('stop-btn').addEventListener('click', () => {
 const PING_WINDOW   = 20;
 const PING_INTERVAL = 250;
 
+// Tracks whether we've already surfaced a network-error toast for the
+// current ping loop. Pings fire every 250ms; without throttling, a
+// disconnected client would spam the toast container.
+let pingNetworkErrorShown = false;
+
 async function pingOnce(signal, seq) {
   const t0 = performance.now();
   try {
@@ -351,6 +383,11 @@ async function pingOnce(signal, seq) {
     return { rtt: performance.now() - t0, ok: true };
   } catch (e) {
     if (e.name === 'AbortError') throw e;
+    if (!pingNetworkErrorShown) {
+      pingNetworkErrorShown = true;
+      const info = toastForFetchError(e, 0);
+      if (info) showToast(info.msg, info.level);
+    }
     return { rtt: 0, ok: false };
   }
 }
@@ -432,7 +469,11 @@ async function measureDownload(signal) {
     }
 
     const res = await fetch(url, { cache: 'no-store', signal });
-    if (!res.ok || !res.body) throw new Error('download failed');
+    if (!res.ok || !res.body) {
+      const err = new Error('download failed');
+      err.httpStatus = res.status;
+      throw err;
+    }
     const reader = res.body.getReader();
 
     for (;;) {
@@ -483,7 +524,16 @@ function postBlobUntil(blob, onProgress, signal, deadlineMs) {
     const onUserAbort = () => { externalAbort = true; xhr.abort(); };
 
     xhr.upload.addEventListener('progress', onProgress);
-    xhr.addEventListener('load',  () => { cleanup(); resolve({ aborted: false }); });
+    xhr.addEventListener('load', () => {
+      cleanup();
+      if (xhr.status >= 200 && xhr.status < 400) {
+        resolve({ aborted: false });
+      } else {
+        const err = new Error('upload XHR status ' + xhr.status);
+        err.httpStatus = xhr.status;
+        reject(err);
+      }
+    });
     xhr.addEventListener('abort', () => {
       cleanup();
       if (externalAbort)    reject(new DOMException('Aborted', 'AbortError'));
@@ -493,7 +543,11 @@ function postBlobUntil(blob, onProgress, signal, deadlineMs) {
     xhr.addEventListener('error', () => {
       cleanup();
       if (endedByDeadline) resolve({ aborted: true });
-      else                 reject(new Error('upload XHR error'));
+      else {
+        // No usable status on a network error — fetch's TypeError analogue.
+        const err = new TypeError('upload XHR error');
+        reject(err);
+      }
     });
 
     xhr.open('POST', '/api/upload?_=' + Date.now() + Math.random());
@@ -578,6 +632,8 @@ async function runTest() {
   btn.disabled = true;
   showStopBtn(true);
   resetDisplay();
+  // Allow the ping loop to surface one fresh network-error toast per run.
+  pingNetworkErrorShown = false;
 
   // Background ping loop — runs for the entire test so latency/jitter/loss
   // update continuously (and capture latency-under-load when download or
@@ -603,7 +659,17 @@ async function runTest() {
     }
 
   } catch (err) {
-    if (err.name !== 'AbortError') console.error('Speedtest error:', err);
+    if (err.name !== 'AbortError') {
+      console.error('Speedtest error:', err);
+      const info = toastForFetchError(err, err && err.httpStatus);
+      if (info) {
+        // 503 → offer a Retry action so the user can immediately try again.
+        const opts = info.level === 'warn' && err && err.httpStatus === 503
+          ? { actionLabel: t('retry'), onAction: () => runTest() }
+          : {};
+        showToast(info.msg, info.level, opts);
+      }
+    }
   } finally {
     stopPing();
     await pingPromise;
@@ -622,11 +688,23 @@ $('start-btn').addEventListener('click', runTest);
 document.addEventListener('DOMContentLoaded', async () => {
   applyLang();
 
+  // Mount the toast container as early as possible so subsequent bootstrap
+  // failures (config, IP) can surface to the user.
+  const toastContainer = $('toast-container');
+  if (toastContainer) showToast = mountToast(toastContainer);
+
   // Load server config
   try {
     const r = await fetch('/api/config');
     if (r.ok) srvCfg = await r.json();
-  } catch { /* use defaults */ }
+    else {
+      const info = toastForFetchError(null, r.status);
+      if (info) showToast(info.msg, info.level);
+    }
+  } catch (err) {
+    const info = toastForFetchError(err, 0);
+    if (info) showToast(info.msg, info.level);
+  }
 
   // Merge: localStorage > server > defaults
   const localCfg = loadLocalConfig();
@@ -645,5 +723,5 @@ document.addEventListener('DOMContentLoaded', async () => {
       setVal('ip-address', ip);
       setVal('connection-type', ip.includes(':') ? 'IPv6' : 'IPv4');
     }
-  } catch { /* ignore */ }
+  } catch { /* IP is a nice-to-have; don't toast on its failure */ }
 });
