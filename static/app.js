@@ -3,8 +3,6 @@
 import { gaugeAngle, windowStats, pushWindow, throughputMbps, jitterRFC3550 } from './metrics.mjs';
 import { mountToast } from './toast.mjs';
 
-// === [Phase 2-3 module imports] ===
-import { renderChart } from './chart.mjs';    // F2: real-time speed-over-time
 import { mountHistory } from './history.mjs'; // F3: paginated history drawer
 
 /* ── i18n ────────────────────────────────────────────────────────────────── */
@@ -362,13 +360,6 @@ const gaugeNodes = {};
 const pendingSpeed = { download: null, upload: null };
 let speedRafScheduled = false;
 
-// === [F2: chart instance] ===
-// Real-time speed-over-time chart instance. Populated on DOMContentLoaded;
-// read by runTest / measureDownload / measureUpload to push samples and
-// reset between runs. Null before mount → all call sites guard.
-let speedChart = null;
-// === [F2 end] ===
-
 function flushSpeed() {
   speedRafScheduled = false;
   for (const prefix of ['download', 'upload']) {
@@ -579,12 +570,6 @@ async function measureDownload(signal) {
       const elapsedMs = now - measureStart;
       const mbps      = throughputMbps(totalReceived, elapsedMs);
       setSpeed('download', mbps);
-      // === [F2: chart push DL] ===
-      // Push the current download throughput sample onto the speed chart.
-      // upload value is null here so the upload polyline stays flat (gap)
-      // during the download phase.
-      if (speedChart) speedChart.pushPoint(elapsedMs, mbps, null);
-      // === [F2 end] ===
       // === [F1: slow-start trim] ===
       // Record (elapsedMs, cumulative bytes) so the final number can be
       // recomputed over only the post-warmup tail. The gauge above keeps
@@ -723,12 +708,6 @@ async function measureUpload(signal) {
     const elapsedMs = now - measureStart;
     const mbps      = throughputMbps(totalSent, elapsedMs);
     setSpeed('upload', mbps);
-    // === [F2: chart push UL] ===
-    // Push the current upload throughput sample onto the speed chart.
-    // download value is null here so the download polyline stays flat (gap)
-    // during the upload phase.
-    if (speedChart) speedChart.pushPoint(elapsedMs, null, mbps);
-    // === [F2 end] ===
     // === [F1: slow-start trim] ===
     // Record (elapsedMs, cumulative bytes) for the same post-warmup
     // recomputation done in measureDownload.
@@ -870,15 +849,6 @@ async function runTest() {
   if (bbGrade) bbGrade.textContent = '--';
   // === [F1 end] ===
 
-  // === [F2: chart reset] ===
-  // Clear the speed-over-time chart and unhide its container before each run.
-  // `speedChart` is null until DOMContentLoaded mounts it — guard accordingly
-  // so calls during early-abort scenarios don't throw.
-  if (speedChart) speedChart.reset();
-  const chartCard = $('speed-chart-card');
-  if (chartCard) chartCard.hidden = false;
-  // === [F2 end] ===
-
   // Background ping loop — runs for the entire test so latency/jitter/loss
   // update continuously (and capture latency-under-load when download or
   // upload phases saturate the link).
@@ -1015,15 +985,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch { /* IP is a nice-to-have; don't toast on its failure */ }
 
-  // === [F2: mount speed chart] ===
-  // Mount the real-time speed-over-time chart. Default maxPoints sized for
-  // a 60 s window at ~100 ms cadence; downloadByTime / uploadByTime will
-  // push at the frequency of the underlying TCP read events.
-  const chartEl = $('speed-chart');
-  if (chartEl) {
-    speedChart = renderChart(chartEl, { maxPoints: 600, maxTimeMs: 60_000 });
-  }
-  // === [F2 end] ===
 
   // === [F3: mount history drawer] ===
   // Gated on the server-side feature flag (`historyEnabled` from /api/config).
