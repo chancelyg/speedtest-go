@@ -281,6 +281,10 @@ $('lang-toggle').addEventListener('click', () => {
   lang = lang === 'zh' ? 'en' : 'zh';
   try { localStorage.setItem('speedtest_lang', lang); } catch { /* ignore */ }
   applyLang();
+  // === [F3: propagate lang to history + trends panels] ===
+  try { window.__historyPanel?.setLang(lang); } catch { /* defensive — panel may not be mounted */ }
+  try { window.__trendsPanel?.setLang(lang);  } catch { /* defensive — panel may not be mounted */ }
+  // === [F3 end] ===
 });
 
 /* ── DOM helpers ─────────────────────────────────────────────────────────── */
@@ -762,6 +766,64 @@ async function measureUpload(signal) {
   // === [F1 end] ===
 }
 
+/* ── [F3: collectFinalResult helper] ─────────────────────────────────────── */
+// Assemble the Result JSON payload posted to /api/results when history is
+// enabled. We read most metrics back from the DOM rather than threading
+// them through return values — the visible numbers are what the user just
+// saw, which is the contract we want to persist.
+//
+// F1 owns idle/loaded latency and the bufferbloat grade; these fields are
+// optional in B1's schema, so missing values fall back to 0 / "".
+function parseDomNumber(id) {
+  const el = document.getElementById(id);
+  if (!el) return 0;
+  // Values render as "123.4 ms" / "950.2" / "--". A leading "--" or a
+  // non-numeric prefix yields 0 from parseFloat, which is exactly what we
+  // want to send as the "not measured" sentinel.
+  const n = parseFloat(el.textContent);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function collectFinalResult() {
+  // Packet loss is rendered as "x.y %"; parseFloat strips the unit.
+  const packetLoss     = parseDomNumber('packet-loss');
+  const downloadMbps   = parseDomNumber('download-speed');
+  const uploadMbps     = parseDomNumber('upload-speed');
+  const dlLatency      = parseDomNumber('download-latency');
+  const ulLatency      = parseDomNumber('upload-latency');
+  const dlJitter       = parseDomNumber('download-jitter');
+  const ulJitter       = parseDomNumber('upload-jitter');
+  // F1 may not have shipped yet — fall back to "" so the schema stays valid.
+  const gradeEl        = document.getElementById('bufferbloat-grade');
+  const grade          = (gradeEl && /^[A-D]$/.test(gradeEl.textContent.trim()))
+    ? gradeEl.textContent.trim()
+    : '';
+  // "Idle" baseline is the minimum of the two per-direction averages —
+  // when F1 isn't shipped we just use the smaller of dl/ul latency.
+  const idleLatency    = Math.min(
+    dlLatency > 0 ? dlLatency : Infinity,
+    ulLatency > 0 ? ulLatency : Infinity,
+  );
+  const loadedLatency  = Math.max(dlLatency, ulLatency);
+
+  return {
+    download_mbps:      downloadMbps,
+    upload_mbps:        uploadMbps,
+    latency_idle_ms:    Number.isFinite(idleLatency) ? idleLatency : 0,
+    latency_loaded_ms:  loadedLatency,
+    download_jitter_ms: dlJitter,
+    upload_jitter_ms:   ulJitter,
+    packet_loss:        packetLoss,
+    bufferbloat_grade:  grade,
+    settings_json:      JSON.stringify({
+      mode:     activeCfg.mode,
+      duration: activeCfg.durationSecs,
+      streams:  activeCfg.streams,
+    }),
+  };
+}
+/* ── [F3 end] ─────────────────────────────────────────────────────────── */
+
 /* ── Orchestrate full test ───────────────────────────────────────────────── */
 async function runTest() {
   if (testing) return;
@@ -853,9 +915,30 @@ async function runTest() {
     // === [F1 end] ===
 
     // === [F3: persist result] ===
-    // F3 POSTs the final result JSON to /api/results (B1's endpoint).
-    // Only when history is enabled (srvCfg.historyEnabled === true).
-    // After successful POST, refresh the history drawer if mounted.
+    // POST the final result to B1's /api/results so it shows up in the
+    // history drawer + trends panel. Gated on the server feature flag.
+    // Persistence failures are logged and otherwise ignored — the test
+    // itself succeeded, so we must not show the user a destructive error.
+    if (srvCfg?.historyEnabled && !signal.aborted) {
+      try {
+        const result = collectFinalResult();
+        const r = await fetch('/api/results', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(result),
+          signal,
+        });
+        if (!r.ok) {
+          console.warn('persist result: server returned', r.status);
+        }
+        window.__historyPanel?.refresh().catch(() => {});
+        window.__trendsPanel?.refresh().catch(() => {});
+      } catch (err) {
+        if (err && err.name !== 'AbortError') {
+          console.error('persist result failed', err);
+        }
+      }
+    }
     // === [F3 end] ===
 
   } catch (err) {
@@ -936,8 +1019,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   // === [F2 end] ===
 
   // === [F3: mount history drawer + trends panel] ===
-  // F3 calls mountHistory(#history-drawer) and mountTrends(#trends-panel),
-  // gated on srvCfg.historyEnabled === true. Both panels stay hidden when
-  // history is disabled (DB_PATH empty server-side).
+  // Gated on the server-side feature flag (`historyEnabled` from /api/config).
+  // When disabled both panels stay hidden — preserves the zero-config /
+  // no-DB single-binary deployment story.
+  if (srvCfg?.historyEnabled) {
+    const historyEl = $('history-drawer');
+    const trendsEl  = $('trends-panel');
+    if (historyEl) {
+      historyEl.hidden = false;
+      const hist = mountHistory(historyEl, { apiBase: '/api/results', limit: 20, lang });
+      // Stash on window so runTest's [F3: persist result] block can call
+      // refresh() without re-importing or threading through closures.
+      window.__historyPanel = hist;
+    }
+    if (trendsEl) {
+      trendsEl.hidden = false;
+      const trends = mountTrends(trendsEl, { apiBase: '/api/results', lang });
+      window.__trendsPanel = trends;
+    }
+  }
   // === [F3 end] ===
 });

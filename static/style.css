@@ -797,4 +797,269 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .chart-card { animation: none; }
   .chart-line { transition: none; }
+/* ── [F3] History card ───────────────────────────────────────────────── */
+
+.history-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: fadeUp 280ms 180ms ease-out both;
+}
+
+.history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.history-refresh {
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--transition), background var(--transition);
+}
+.history-refresh:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.history-refresh:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.history-body {
+  min-height: 40px;
+}
+
+.history-empty {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.history-error {
+  color: var(--danger);
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.history-table thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.history-row td {
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.history-row:last-child td {
+  border-bottom: 0;
+}
+
+.history-row:hover td {
+  background: var(--accent-soft);
+}
+
+.history-cell-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.history-cell-grade {
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+/* ── [F3] Trends card ────────────────────────────────────────────────── */
+
+.trends-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: fadeUp 280ms 220ms ease-out both;
+}
+
+.trends-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.trends-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin-right: auto;
+}
+
+.trends-window-toggle {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.trends-window-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color var(--transition), background var(--transition);
+}
+.trends-window-btn:hover {
+  color: var(--text);
+}
+.trends-window-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.trends-export {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.trends-export-btn {
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--transition), background var(--transition), color var(--transition);
+}
+.trends-export-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.trends-chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trends-chart-caption {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.trends-chart {
+  width: 100%;
+  height: 140px;
+  display: block;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.trends-axis {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+
+.trends-line {
+  stroke-width: 2;
+}
+
+.trends-line-dl  { stroke: var(--download-to); }
+.trends-line-ul  { stroke: var(--upload-to);   }
+.trends-line-lat { stroke: var(--accent);      }
+
+.trends-dot {
+  stroke-width: 0;
+}
+.trends-dot.trends-line-dl  { fill: var(--download-to); }
+.trends-dot.trends-line-ul  { fill: var(--upload-to);   }
+.trends-dot.trends-line-lat { fill: var(--accent);      }
+
+.trends-status {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 6px 0 0;
+}
+
+.trends-status[hidden] {
+  display: none !important;
+}
+
+@media (max-width: 560px) {
+  .history-table thead th:nth-child(1),
+  .history-row td:nth-child(1) {
+    /* On narrow screens shorten the timestamp column visually. */
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .trends-head {
+    gap: 8px;
+  }
+  .trends-export-btn,
+  .trends-window-btn {
+    font-size: 11px;
+    padding: 5px 8px;
+  }
 }
