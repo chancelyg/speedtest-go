@@ -317,7 +317,10 @@ body {
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* auto-fit so the Bufferbloat cell (added by Phase 2 F1) becomes a 4th
+     column when it unhides after a test, while keeping a clean 3-column
+     layout in the default state. */
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   overflow: hidden;
   animation: fadeUp 280ms 60ms ease-out both;
 }
@@ -797,6 +800,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .chart-card { animation: none; }
   .chart-line { transition: none; }
+}
+
 /* ── [F3] History card ───────────────────────────────────────────────── */
 
 .history-card {

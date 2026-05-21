@@ -48,14 +48,15 @@ test('logScaleY: 0.1 Mbps maps to bottom of chart (y = CHART_H)', () => {
   assert.equal(logScaleY(0.1), CHART_H);
 });
 
-test('logScaleY: 1000 Mbps maps to top of chart (y = 0)', () => {
-  assert.equal(logScaleY(1000), 0);
+test('logScaleY: 100 Gbps maps to top of chart (y = 0)', () => {
+  // LOG_MAX = 5 → 100_000 Mbps = 100 Gbps is the top of the axis.
+  assert.equal(logScaleY(100_000), 0);
 });
 
-test('logScaleY: 10 Mbps lands at log-scale midpoint', () => {
-  // log10(10) = 1, log10(0.1)=-1, log10(1000)=3 → fraction = (1-(-1))/4 = 0.5
+test('logScaleY: 100 Mbps lands at log-scale midpoint', () => {
+  // log10(100)=2, log10(0.1)=-1, log10(100_000)=5 → fraction = (2-(-1))/6 = 0.5
   // y = CHART_H * (1 - 0.5) = CHART_H/2
-  assert.equal(logScaleY(10), CHART_H / 2);
+  assert.equal(logScaleY(100), CHART_H / 2);
 });
 
 test('logScaleY: values <= 0 or NaN clamp to bottom', () => {
@@ -64,8 +65,8 @@ test('logScaleY: values <= 0 or NaN clamp to bottom', () => {
   assert.equal(logScaleY(NaN), CHART_H);
 });
 
-test('logScaleY: values above 1000 clamp to top', () => {
-  assert.equal(logScaleY(1e6), 0);
+test('logScaleY: values above the ceiling clamp to top', () => {
+  assert.equal(logScaleY(1e9), 0);
 });
 
 test('logScaleY: monotonically decreases as Mbps increases', () => {

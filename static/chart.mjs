@@ -27,10 +27,12 @@
 export const CHART_W = 600;
 export const CHART_H = 200;
 
-// Log axis range. 0.1 Mbps is the visible floor, 1000 Mbps the ceiling.
-// log10(0.1) = -1, log10(1000) = 3 → span = 4 decades.
+// Log axis range. 0.1 Mbps is the visible floor; the ceiling spans 6 decades
+// to 100 Gbps so the chart still has shape under localhost / 10G LAN tests
+// (20-30 Gbps would otherwise pin against the top with a hairline visible).
+// log10(0.1) = -1, log10(100000) = 5 → span = 6 decades.
 const LOG_MIN = -1;
-const LOG_MAX = 3;
+const LOG_MAX = 5;
 const LOG_SPAN = LOG_MAX - LOG_MIN;
 
 const DEFAULT_MAX_POINTS  = 600;
@@ -129,7 +131,8 @@ function mountStructure(svgEl) {
 
   // Background grid — 3 horizontal lines (matches log decades 1/10/100 Mbps).
   const gridGroup = el(svgEl, 'g', { class: 'chart-grid' });
-  const decadeMbps = [1, 10, 100];
+  // Tick labels at three evenly-spaced decades across the 6-decade range.
+  const decadeMbps = [1, 100, 10000];
   for (const v of decadeMbps) {
     const y = logScaleY(v);
     gridGroup.appendChild(el(svgEl, 'line', {
