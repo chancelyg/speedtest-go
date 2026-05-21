@@ -3,6 +3,14 @@
 import { gaugeAngle, windowStats, pushWindow, throughputMbps } from './metrics.mjs';
 import { mountToast } from './toast.mjs';
 
+// === [Phase 2-3 module imports] ===
+// Skeleton imports — real implementations land via agents F1/F2/F3. Each
+// returns a no-op instance until its owner ships, so app.js can wire the
+// mount points now without breaking the build.
+import { renderChart } from './chart.mjs';   // F2: real-time speed-over-time
+import { mountHistory } from './history.mjs'; // F3: history drawer
+import { mountTrends }  from './trends.mjs';  // F3: trends panel
+
 /* ── i18n ────────────────────────────────────────────────────────────────── */
 const i18n = {
   zh: {
@@ -483,6 +491,14 @@ async function measureDownload(signal) {
       if (now < measureStart) continue;     // warmup — discard
       totalReceived += value.byteLength;
       setSpeed('download', throughputMbps(totalReceived, now - measureStart));
+      // === [F2: chart push DL] === F2 pushes (now - measureStart, mbps, null)
+      // to speedChart.pushPoint() so the line chart fills during download.
+      // === [F2 end] ===
+      // === [F1: slow-start trim] === F1 may consult a shared `warmupMs`
+      // (from /api/config) and exclude samples earlier than that window from
+      // the displayed throughput; the gauge `setSpeed` above runs every
+      // sample regardless for liveness.
+      // === [F1 end] ===
     }
   };
 
@@ -576,6 +592,12 @@ async function measureUpload(signal) {
     if (now < measureStart) return;
     totalSent += delta;
     setSpeed('upload', throughputMbps(totalSent, now - measureStart));
+    // === [F2: chart push UL] === F2 pushes (now - measureStart, null, mbps)
+    // to speedChart.pushPoint() so the line chart fills during upload.
+    // === [F2 end] ===
+    // === [F1: slow-start trim] === Same as in measureDownload — F1 trims
+    // warmup samples for the displayed throughput total.
+    // === [F1 end] ===
   };
 
   const workerSize = async () => {
@@ -635,6 +657,15 @@ async function runTest() {
   // Allow the ping loop to surface one fresh network-error toast per run.
   pingNetworkErrorShown = false;
 
+  // === [F1: bufferbloat reset] ===
+  // F1 should reset its idle-latency / loaded-latency / grade state here
+  // before the new run begins.
+  // === [F1 end] ===
+
+  // === [F2: chart reset] ===
+  // F2 should clear the speed-over-time chart and unhide #speed-chart-card.
+  // === [F2 end] ===
+
   // Background ping loop — runs for the entire test so latency/jitter/loss
   // update continuously (and capture latency-under-load when download or
   // upload phases saturate the link).
@@ -644,6 +675,10 @@ async function runTest() {
 
   try {
     setStage('stagePing');
+    // === [F1: idle-latency baseline] ===
+    // F1 should mark "currently measuring idle latency" so runPingLoop can
+    // route the next ~1.5s of samples into the idle-latency window.
+    // === [F1 end] ===
     // Warm up the ping window before kicking off throughput tests so the
     // first metrics shown are based on real samples, not zeros.
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -657,6 +692,17 @@ async function runTest() {
       setStage('stageUp');
       await measureUpload(signal);
     }
+
+    // === [F1: bufferbloat grade compute] ===
+    // F1 computes loadedLatency - idleLatency, maps to A/B/C/D, writes to
+    // #bufferbloat-grade and unhides #bufferbloat-grade-cell.
+    // === [F1 end] ===
+
+    // === [F3: persist result] ===
+    // F3 POSTs the final result JSON to /api/results (B1's endpoint).
+    // Only when history is enabled (srvCfg.historyEnabled === true).
+    // After successful POST, refresh the history drawer if mounted.
+    // === [F3 end] ===
 
   } catch (err) {
     if (err.name !== 'AbortError') {
@@ -724,4 +770,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       setVal('connection-type', ip.includes(':') ? 'IPv6' : 'IPv4');
     }
   } catch { /* IP is a nice-to-have; don't toast on its failure */ }
+
+  // === [F2: mount speed chart] ===
+  // F2 wires renderChart(#speed-chart) and stashes the instance for runTest
+  // to call instance.pushPoint() / reset(). Keep the instance in a module-
+  // scoped `let speedChart = null;` declared in the F2 region above.
+  // === [F2 end] ===
+
+  // === [F3: mount history drawer + trends panel] ===
+  // F3 calls mountHistory(#history-drawer) and mountTrends(#trends-panel),
+  // gated on srvCfg.historyEnabled === true. Both panels stay hidden when
+  // history is disabled (DB_PATH empty server-side).
+  // === [F3 end] ===
 });

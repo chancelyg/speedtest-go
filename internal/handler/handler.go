@@ -84,6 +84,13 @@ type configResponse struct {
 	DownloadMB   int    `json:"downloadMB"`
 	UploadMB     int    `json:"uploadMB"`
 	Streams      int    `json:"streams"`
+	// Phase 2-3 additions — let the frontend tailor its behaviour:
+	//   warmupMs:       milliseconds of throughput samples F1 should discard
+	//                   at the start of download/upload (slow-start trim).
+	//   historyEnabled: true iff the server has a working SQLite store;
+	//                   F3 hides history/trends UI when false.
+	WarmupMs       int  `json:"warmupMs"`
+	HistoryEnabled bool `json:"historyEnabled"`
 }
 
 // ConfigHandler exposes the server-side test configuration so the frontend
@@ -94,13 +101,20 @@ func (h *Handler) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, configResponse{
-		Mode:         string(h.cfg.Mode),
-		DurationSecs: int(h.cfg.Duration.Seconds()),
-		DownloadMB:   h.cfg.DownloadMB,
-		UploadMB:     h.cfg.UploadMB,
-		Streams:      h.cfg.Streams,
+		Mode:           string(h.cfg.Mode),
+		DurationSecs:   int(h.cfg.Duration.Seconds()),
+		DownloadMB:     h.cfg.DownloadMB,
+		UploadMB:       h.cfg.UploadMB,
+		Streams:        h.cfg.Streams,
+		WarmupMs:       h.cfg.WarmupMs,
+		HistoryEnabled: h.historyEnabled(),
 	})
 }
+
+// historyEnabled reports whether the SQLite-backed history store is wired up.
+// B1 must flip this to consult the actual store handle once internal/store is
+// in place. Until then it stays false so the frontend hides History/Trends UI.
+func (h *Handler) historyEnabled() bool { return false }
 
 // ── /api/ip ───────────────────────────────────────────────────────────────
 

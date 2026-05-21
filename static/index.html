@@ -131,6 +131,11 @@
           <span class="metric-label" id="packet-loss-label">丢包率</span>
           <span class="metric-value" id="packet-loss">--</span>
         </div>
+        <!-- === [F1: bufferbloat-grade] populated by Phase 2 agent F1 === -->
+        <div class="metric" id="bufferbloat-grade-cell" hidden>
+          <span class="metric-label" id="bufferbloat-label">Bufferbloat</span>
+          <span class="metric-value" id="bufferbloat-grade">--</span>
+        </div>
         <div class="metric">
           <span class="metric-label" id="ip-label">IP 地址</span>
           <span class="metric-value" id="ip-address">--</span>
@@ -140,6 +145,18 @@
           <span class="metric-value" id="connection-type">--</span>
         </div>
       </section>
+
+      <!-- === [F2: speed-chart] populated by Phase 2 agent F2 === -->
+      <section class="chart-card" id="speed-chart-card" hidden>
+        <svg id="speed-chart" class="speed-chart" viewBox="0 0 600 200"
+             preserveAspectRatio="none" aria-hidden="true"></svg>
+      </section>
+
+      <!-- === [F3: history-drawer] populated by Phase 3 agent F3 === -->
+      <section class="history-card" id="history-drawer" hidden></section>
+
+      <!-- === [F3: trends-panel] populated by Phase 3 agent F3 === -->
+      <section class="trends-card" id="trends-panel" hidden></section>
 
       <!-- Advanced settings -->
       <section class="config-section">
