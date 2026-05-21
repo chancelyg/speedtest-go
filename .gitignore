@@ -1,3 +1,6 @@
 .claude/
 /speedtest-go
 /.playwright-mcp/
+speedtest.db
+speedtest.db-shm
+speedtest.db-wal

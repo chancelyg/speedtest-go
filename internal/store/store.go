@@ -2,13 +2,13 @@
 // results and the data types shared between the storage layer and the HTTP
 // handler layer.
 //
-// The interface is intentionally small (Save / List / Range / Count / Delete /
+// The interface is intentionally small (Save / List / Count / Delete /
 // DeleteAll / PruneOlderThan / Close) so it can be implemented by a future
 // in-memory or remote backend without dragging the rest of the codebase along.
 //
-// Time semantics: CreatedAt and the "from"/"to" arguments to Range are
-// expressed as Unix milliseconds. Milliseconds (rather than seconds) keep the
-// ordering stable when multiple results are saved in the same second.
+// Time semantics: CreatedAt is expressed in Unix milliseconds. Milliseconds
+// (rather than seconds) keep the ordering stable when multiple results are
+// saved in the same second.
 package store
 
 import "context"
@@ -46,9 +46,6 @@ type Store interface {
 	// List returns up to `limit` results, newest first, skipping the first
 	// `offset`. limit must be > 0; offset must be >= 0.
 	List(ctx context.Context, limit, offset int) ([]Result, error)
-
-	// Range returns all results with createdAt in [fromMs, toMs], newest first.
-	Range(ctx context.Context, fromMs, toMs int64) ([]Result, error)
 
 	// Count returns the total number of stored results.
 	Count(ctx context.Context) (int64, error)

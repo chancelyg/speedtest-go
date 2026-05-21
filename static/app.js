@@ -107,14 +107,26 @@ function saveLocalConfig(cfg) {
   } catch { /* ignore */ }
 }
 
+// Clamp the merged numeric config to ranges the server is known to accept.
+// localStorage is attacker-writable (devtools / extensions / shared machine),
+// so this is defence-in-depth even though the server clamps again.
+function clampNum(v, lo, hi, def) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(hi, Math.max(lo, n));
+}
+
 function mergeConfig(serverCfg, localCfg) {
   const defaults = { mode: 'time', durationSecs: 15, downloadMB: 25, uploadMB: 10, streams: 4 };
+  const mode = (localCfg?.mode === 'size' || localCfg?.mode === 'time')
+    ? localCfg.mode
+    : (serverCfg.mode === 'size' || serverCfg.mode === 'time' ? serverCfg.mode : defaults.mode);
   return {
-    mode:         localCfg?.mode         || serverCfg.mode         || defaults.mode,
-    durationSecs: Number(localCfg?.durationSecs || serverCfg.durationSecs || defaults.durationSecs),
-    downloadMB:   Number(localCfg?.downloadMB   || serverCfg.downloadMB   || defaults.downloadMB),
-    uploadMB:     Number(localCfg?.uploadMB     || serverCfg.uploadMB     || defaults.uploadMB),
-    streams:      Number(localCfg?.streams      || serverCfg.streams      || defaults.streams),
+    mode,
+    durationSecs: clampNum(localCfg?.durationSecs ?? serverCfg.durationSecs, 1, 300,   defaults.durationSecs),
+    downloadMB:   clampNum(localCfg?.downloadMB   ?? serverCfg.downloadMB,   1, 10240, defaults.downloadMB),
+    uploadMB:     clampNum(localCfg?.uploadMB     ?? serverCfg.uploadMB,     1, 10240, defaults.uploadMB),
+    streams:      clampNum(localCfg?.streams      ?? serverCfg.streams,      1, 32,    defaults.streams),
   };
 }
 

@@ -149,40 +149,6 @@ func TestListRejectsZeroLimit(t *testing.T) {
 	}
 }
 
-func TestRangeFiltersByTime(t *testing.T) {
-	s := open(t)
-	ctx := context.Background()
-
-	for i := int64(1); i <= 10; i++ {
-		if _, err := s.Save(ctx, sampleResult(i*1000)); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-	}
-
-	cases := []struct {
-		name         string
-		from, to     int64
-		wantLen      int
-	}{
-		{"inclusive bounds", 3000, 7000, 5},
-		{"empty range above", 100_000, 200_000, 0},
-		{"empty range below", 0, 500, 0},
-		{"inverted range", 5000, 1000, 0},
-		{"single point", 5000, 5000, 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := s.Range(ctx, tc.from, tc.to)
-			if err != nil {
-				t.Fatalf("Range: %v", err)
-			}
-			if len(got) != tc.wantLen {
-				t.Errorf("len = %d, want %d", len(got), tc.wantLen)
-			}
-		})
-	}
-}
-
 func TestCount(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()

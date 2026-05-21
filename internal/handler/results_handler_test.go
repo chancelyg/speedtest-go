@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -64,18 +63,6 @@ func seed(t *testing.T, s store.Store, n int) []store.Result {
 	return out
 }
 
-// withLoopback marks a request as coming from a loopback peer.
-func withLoopback(r *http.Request) *http.Request {
-	r.RemoteAddr = "127.0.0.1:54321"
-	return r
-}
-
-// withPublicPeer marks a request as coming from a non-loopback peer.
-func withPublicPeer(r *http.Request) *http.Request {
-	r.RemoteAddr = "203.0.113.5:80"
-	return r
-}
-
 // ── history disabled (nil store) ─────────────────────────────────────────────
 
 func TestResultsAllReturn503WhenStoreNil(t *testing.T) {
@@ -88,13 +75,11 @@ func TestResultsAllReturn503WhenStoreNil(t *testing.T) {
 	}{
 		{"list", http.MethodGet, "/api/results", h.ResultsListOrCreate},
 		{"create", http.MethodPost, "/api/results", h.ResultsListOrCreate},
-		{"deleteAll", http.MethodDelete, "/api/results", h.ResultsListOrCreate},
-		{"byId", http.MethodDelete, "/api/results/1", h.ResultsByID},
 		{"export", http.MethodGet, "/api/results/export", h.ResultsExport},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := withLoopback(httptest.NewRequest(tc.method, tc.path, nil))
+			req := httptest.NewRequest(tc.method, tc.path, nil)
 			w := httptest.NewRecorder()
 			tc.handler(w, req)
 			if w.Code != http.StatusServiceUnavailable {
@@ -315,120 +300,15 @@ func TestExportRejectsNonGET(t *testing.T) {
 	}
 }
 
-// ── DELETE /api/results/{id} ─────────────────────────────────────────────────
+// ── DELETE rejected (DELETE endpoints were removed) ─────────────────────────
 
-func TestDeleteByIDLoopbackOK(t *testing.T) {
-	h, s := newHandlerWithStore(t)
-	rows := seed(t, s, 2)
-
-	path := fmt.Sprintf("/api/results/%d", rows[0].ID)
-	req := withLoopback(httptest.NewRequest(http.MethodDelete, path, nil))
-	w := httptest.NewRecorder()
-	h.ResultsByID(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-
-	n, _ := s.Count(context.Background())
-	if n != 1 {
-		t.Errorf("remaining = %d, want 1", n)
-	}
-}
-
-func TestDeleteByIDNonLoopbackForbidden(t *testing.T) {
-	h, s := newHandlerWithStore(t)
-	rows := seed(t, s, 1)
-
-	path := fmt.Sprintf("/api/results/%d", rows[0].ID)
-	req := withPublicPeer(httptest.NewRequest(http.MethodDelete, path, nil))
-	w := httptest.NewRecorder()
-	h.ResultsByID(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", w.Code)
-	}
-	n, _ := s.Count(context.Background())
-	if n != 1 {
-		t.Errorf("row was deleted from public peer; remaining = %d, want 1", n)
-	}
-}
-
-func TestDeleteByIDNotFound(t *testing.T) {
+func TestResultsRejectsDelete(t *testing.T) {
 	h, _ := newHandlerWithStore(t)
-	req := withLoopback(httptest.NewRequest(http.MethodDelete, "/api/results/9999", nil))
+	req := httptest.NewRequest(http.MethodDelete, "/api/results", nil)
 	w := httptest.NewRecorder()
-	h.ResultsByID(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Errorf("status = %d, want 404", w.Code)
-	}
-}
-
-func TestDeleteByIDInvalidID(t *testing.T) {
-	h, _ := newHandlerWithStore(t)
-	req := withLoopback(httptest.NewRequest(http.MethodDelete, "/api/results/not-an-int", nil))
-	w := httptest.NewRecorder()
-	h.ResultsByID(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", w.Code)
-	}
-}
-
-func TestResultsByIDRejectsNonDelete(t *testing.T) {
-	h, _ := newHandlerWithStore(t)
-	req := withLoopback(httptest.NewRequest(http.MethodGet, "/api/results/1", nil))
-	w := httptest.NewRecorder()
-	h.ResultsByID(w, req)
+	h.ResultsListOrCreate(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", w.Code)
-	}
-}
-
-func TestResultsByIDIgnoresKnownSubpaths(t *testing.T) {
-	// /api/results/export must NOT be treated as {id} = "export" when
-	// ResultsByID is invoked accidentally.
-	h, _ := newHandlerWithStore(t)
-	for _, p := range []string{"/api/results/export"} {
-		t.Run(p, func(t *testing.T) {
-			req := withLoopback(httptest.NewRequest(http.MethodDelete, p, nil))
-			w := httptest.NewRecorder()
-			h.ResultsByID(w, req)
-			if w.Code != http.StatusNotFound {
-				t.Errorf("status = %d, want 404 (sub-path must not be parsed as id)", w.Code)
-			}
-		})
-	}
-}
-
-// ── DELETE /api/results (delete all) ────────────────────────────────────────
-
-func TestDeleteAllLoopbackOK(t *testing.T) {
-	h, s := newHandlerWithStore(t)
-	seed(t, s, 4)
-
-	req := withLoopback(httptest.NewRequest(http.MethodDelete, "/api/results", nil))
-	w := httptest.NewRecorder()
-	h.ResultsListOrCreate(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	n, _ := s.Count(context.Background())
-	if n != 0 {
-		t.Errorf("remaining = %d, want 0", n)
-	}
-}
-
-func TestDeleteAllNonLoopbackForbidden(t *testing.T) {
-	h, s := newHandlerWithStore(t)
-	seed(t, s, 3)
-
-	req := withPublicPeer(httptest.NewRequest(http.MethodDelete, "/api/results", nil))
-	w := httptest.NewRecorder()
-	h.ResultsListOrCreate(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", w.Code)
-	}
-	n, _ := s.Count(context.Background())
-	if n != 3 {
-		t.Errorf("DeleteAll succeeded from public peer; remaining = %d, want 3", n)
 	}
 }
 
@@ -482,7 +362,6 @@ func TestResultsRoundTripViaHTTPServer(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/results", h.ResultsListOrCreate)
-	mux.HandleFunc("/api/results/", h.ResultsByID)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -511,5 +390,102 @@ func TestResultsRoundTripViaHTTPServer(t *testing.T) {
 	resp.Body.Close()
 	if listBody.Total != 1 {
 		t.Errorf("total = %d, want 1", listBody.Total)
+	}
+}
+
+// ── H-3: malicious POST body sanitisation ───────────────────────────────────
+
+func TestCreateResultSanitisesHostileFields(t *testing.T) {
+	h, s := newHandlerWithStore(t)
+
+	body := `{
+		"download_mbps": 1e20,
+		"upload_mbps": -1,
+		"latency_idle_ms": 1e20,
+		"packet_loss": 200,
+		"bufferbloat_grade": "<script>",
+		"settings_json": "` + strings.Repeat("A", 5000) + `"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/api/results", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ResultsListOrCreate(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", w.Code)
+	}
+
+	rows, err := s.List(context.Background(), 1, 0)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("List: rows=%d err=%v", len(rows), err)
+	}
+	r := rows[0]
+	if r.DownloadMbps != 1_000_000 {
+		t.Errorf("DownloadMbps not clamped: got %v, want 1000000", r.DownloadMbps)
+	}
+	if r.UploadMbps != 0 {
+		t.Errorf("UploadMbps negative not floored: got %v", r.UploadMbps)
+	}
+	if r.PacketLoss != 100 {
+		t.Errorf("PacketLoss not clamped to [0,100]: got %v", r.PacketLoss)
+	}
+	if r.BufferbloatGrade != "" {
+		t.Errorf("BufferbloatGrade hostile value not blanked: %q", r.BufferbloatGrade)
+	}
+	if len(r.SettingsJSON) > 1024 {
+		t.Errorf("SettingsJSON not truncated: len=%d", len(r.SettingsJSON))
+	}
+}
+
+func TestCreateResultRejectsNaN(t *testing.T) {
+	h, s := newHandlerWithStore(t)
+	// JSON spec doesn't allow bare NaN; the decoder errors out before we
+	// reach sanitiseResult. Confirm we return 400 with the generic message.
+	body := strings.NewReader(`{"download_mbps":NaN}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/results", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ResultsListOrCreate(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+	n, _ := s.Count(context.Background())
+	if n != 0 {
+		t.Errorf("malformed body should not have persisted: count=%d", n)
+	}
+}
+
+// ── H-4: CSV injection prefix ───────────────────────────────────────────────
+
+func TestExportCSVNeutralisesFormulaInjection(t *testing.T) {
+	h, s := newHandlerWithStore(t)
+	// Inject hostile client_ip / user_agent / settings_json via direct store
+	// write (mirrors what a hostile POST would persist after sanitisation —
+	// note sanitiseResult zeroes ClientIP/UserAgent before save, so the only
+	// realistic vector is settings_json or a future field).
+	_, err := s.Save(context.Background(), store.Result{
+		BufferbloatGrade: "A",
+		SettingsJSON:     `=cmd|'/C calc'!A0`,
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/results/export?format=csv", nil)
+	w := httptest.NewRecorder()
+	h.ResultsExport(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	rows, err := csv.NewReader(w.Body).ReadAll()
+	if err != nil {
+		t.Fatalf("csv parse: %v", err)
+	}
+	// Header + 1 data row.
+	if len(rows) != 2 {
+		t.Fatalf("row count = %d, want 2", len(rows))
+	}
+	settingsCol := rows[1][12]
+	if !strings.HasPrefix(settingsCol, "'") {
+		t.Errorf("formula not prefixed with apostrophe: %q", settingsCol)
 	}
 }

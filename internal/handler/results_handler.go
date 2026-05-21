@@ -4,7 +4,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"net"
+	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,24 @@ import (
 
 	"speedtest-go/internal/store"
 )
+
+// genericInternalError is the body returned to clients on 500 responses. We
+// intentionally do not surface err.Error() because driver-level messages can
+// contain schema names, file paths or OS-level details that aid attackers
+// fingerprinting the deployment. The full error is logged server-side instead
+// (loggingMiddleware in main.go already correlates by X-Request-Id).
+const genericInternalError = "internal error"
+
+// internalErr logs the full err at error level and writes the generic message
+// to the client. Correlate via the X-Request-Id header in the access log.
+func internalErr(w http.ResponseWriter, r *http.Request, op string, err error) {
+	slog.Error("handler internal error",
+		"op", op,
+		"path", r.URL.Path,
+		"err", err.Error(),
+	)
+	writeErr(w, http.StatusInternalServerError, genericInternalError)
+}
 
 // historyDisabledMsg is returned in the JSON envelope when the store is nil.
 // Keeping the wording stable allows the frontend to test for the exact string.
@@ -41,35 +60,21 @@ func writeHistoryDisabled(w http.ResponseWriter) {
 	writeErr(w, http.StatusServiceUnavailable, historyDisabledMsg)
 }
 
-// isLoopbackPeer returns true when the request's direct peer address is a
-// loopback IP (127.0.0.0/8 or ::1). Destructive endpoints use this to limit
-// access to the same host even when the server is bound on 0.0.0.0. We use
-// the *direct* RemoteAddr (not ClientIP) on purpose: ClientIP trusts proxy
-// headers from private peers, but admin endpoints must NOT trust headers.
-func isLoopbackPeer(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback()
-}
-
 // ResultsListOrCreate is the multiplex handler bound to GET /api/results and
 // POST /api/results. The two methods share a path because the underlying
 // resource ("the results collection") is the same; routing inside the handler
 // keeps main.go's mux setup compact.
+//
+// DELETE methods are intentionally not exposed: the frontend has no UI for
+// destructive operations, and adding them would require a real authn story
+// (the previous loopback-only check is bypassed by any reverse proxy on the
+// same host, which is the typical deployment topology).
 func (h *Handler) ResultsListOrCreate(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		h.listResults(w, r)
 	case http.MethodPost:
 		h.createResult(w, r)
-	case http.MethodDelete:
-		h.deleteAllResults(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -86,12 +91,12 @@ func (h *Handler) listResults(w http.ResponseWriter, r *http.Request) {
 
 	results, err := h.store.List(r.Context(), limit, offset)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		internalErr(w, r, "store.List", err)
 		return
 	}
 	total, err := h.store.Count(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		internalErr(w, r, "store.Count", err)
 		return
 	}
 	writeJSON(w, map[string]any{
@@ -115,18 +120,32 @@ func (h *Handler) createResult(w http.ResponseWriter, r *http.Request) {
 	// 1 MB body cap is enormous for a result document (typical < 1 kB) but
 	// cheap to enforce and stops a malformed-JSON denial of service.
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
 	var in store.Result
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid json: "+err.Error())
+	if err := dec.Decode(&in); err != nil {
+		// Don't echo the raw decoder message — it contains field types /
+		// byte offsets that leak internal struct shape. Generic + log only.
+		slog.Warn("results decode", "path", r.URL.Path, "err", err.Error())
+		writeErr(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	// H-3: sanitise / clamp client-supplied numeric and string fields BEFORE
+	// the server-side overwrites below, so a malicious client can't poison
+	// the row with NaN/Inf, oversized text or fake grades.
+	sanitiseResult(&in)
+
+	// Server-controlled fields. Always overwrite — clients cannot lie about
+	// timestamp, peer IP, or user agent. UA is truncated to keep row size
+	// bounded (some bots send multi-kB UAs).
 	in.CreatedAt = time.Now().UnixMilli()
 	in.ClientIP = ClientIP(r)
-	in.UserAgent = r.Header.Get("User-Agent")
+	in.UserAgent = truncate(r.Header.Get("User-Agent"), 512)
 
 	saved, err := h.store.Save(r.Context(), in)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		internalErr(w, r, "store.Save", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -135,68 +154,6 @@ func (h *Handler) createResult(w http.ResponseWriter, r *http.Request) {
 		"id":         saved.ID,
 		"created_at": saved.CreatedAt,
 	})
-}
-
-// deleteAllResults serves DELETE /api/results. Loopback-gated.
-func (h *Handler) deleteAllResults(w http.ResponseWriter, r *http.Request) {
-	if h.store == nil {
-		writeHistoryDisabled(w)
-		return
-	}
-	if !isLoopbackPeer(r) {
-		writeErr(w, http.StatusForbidden, "loopback only")
-		return
-	}
-	n, err := h.store.DeleteAll(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, map[string]any{"deleted": n})
-}
-
-// ResultsByID handles requests at /api/results/{id}. Currently only DELETE is
-// supported (loopback-gated). GET-by-id is not part of the P2.5/P3.1 surface
-// so we 404 it explicitly to avoid leaking implementation details.
-func (h *Handler) ResultsByID(w http.ResponseWriter, r *http.Request) {
-	if h.store == nil {
-		writeHistoryDisabled(w)
-		return
-	}
-	// Disambiguate /api/results/range and /api/results/export, which share
-	// the /api/results/ prefix in the mux. These have dedicated handlers and
-	// should never reach here when routing is correct — but defensive coding
-	// keeps the surface stable if the mux pattern set changes.
-	rest := strings.TrimPrefix(r.URL.Path, "/api/results/")
-	switch rest {
-	case "", "export":
-		http.NotFound(w, r)
-		return
-	}
-
-	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !isLoopbackPeer(r) {
-		writeErr(w, http.StatusForbidden, "loopback only")
-		return
-	}
-	id, err := strconv.ParseInt(rest, 10, 64)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-	ok, err := h.store.Delete(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !ok {
-		writeErr(w, http.StatusNotFound, "not found")
-		return
-	}
-	writeJSON(w, map[string]any{"deleted": id})
 }
 
 // ResultsExport serves GET /api/results/export?format=csv|json.
@@ -227,7 +184,7 @@ func (h *Handler) ResultsExport(w http.ResponseWriter, r *http.Request) {
 	// speed tests through the browser.
 	results, err := h.store.List(r.Context(), 100_000, 0)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		internalErr(w, r, "store.List/export", err)
 		return
 	}
 
@@ -245,7 +202,10 @@ func (h *Handler) ResultsExport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeResultsCSV writes a CSV header + one row per result.
+// writeResultsCSV writes a CSV header + one row per result. String fields
+// pass through csvSafe to neutralise formula-injection payloads (=, +, -, @,
+// CR, TAB prefixes) that Excel / LibreOffice would otherwise interpret as
+// executable formulae when the file is opened.
 func writeResultsCSV(w http.ResponseWriter, results []store.Result) {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
@@ -267,12 +227,91 @@ func writeResultsCSV(w http.ResponseWriter, results []store.Result) {
 			strconv.FormatFloat(r.DownloadJitterMs, 'f', -1, 64),
 			strconv.FormatFloat(r.UploadJitterMs, 'f', -1, 64),
 			strconv.FormatFloat(r.PacketLoss, 'f', -1, 64),
-			r.BufferbloatGrade,
-			r.ClientIP,
-			r.UserAgent,
-			r.SettingsJSON,
+			csvSafe(r.BufferbloatGrade),
+			csvSafe(r.ClientIP),
+			csvSafe(r.UserAgent),
+			csvSafe(r.SettingsJSON),
 		})
 	}
+}
+
+// csvSafe prefixes values that would be interpreted as a formula by Excel /
+// LibreOffice with a single quote. The leading apostrophe is invisible in
+// the spreadsheet cell but neutralises the OLE-style command execution.
+func csvSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
+}
+
+// sanitiseResult clamps client-supplied numeric fields to safe ranges,
+// rejects non-finite floats, normalises BufferbloatGrade to the documented
+// enum, and bounds SettingsJSON length. Called from createResult before the
+// row is handed to the store.
+func sanitiseResult(r *store.Result) {
+	// Floats: NaN/Inf become 0; mbps capped at 1e6 (1 Tbps — far above any
+	// real link), latency/jitter capped at 60_000 ms, packet loss at 100.
+	r.DownloadMbps = clampFloat(r.DownloadMbps, 0, 1_000_000)
+	r.UploadMbps = clampFloat(r.UploadMbps, 0, 1_000_000)
+	r.LatencyIdleMs = clampFloat(r.LatencyIdleMs, 0, 60_000)
+	r.LatencyLoadedMs = clampFloat(r.LatencyLoadedMs, 0, 60_000)
+	r.DownloadJitterMs = clampFloat(r.DownloadJitterMs, 0, 60_000)
+	r.UploadJitterMs = clampFloat(r.UploadJitterMs, 0, 60_000)
+	r.PacketLoss = clampFloat(r.PacketLoss, 0, 100)
+
+	// Bufferbloat grade: enum of "" / A / B / C / D. Anything else becomes "".
+	switch r.BufferbloatGrade {
+	case "", "A", "B", "C", "D":
+		// pass
+	default:
+		r.BufferbloatGrade = ""
+	}
+
+	// SettingsJSON: bound size; clients only ever send a tiny object like
+	// {"mode":"time","duration":15,"streams":4}. Reject anything north of
+	// 1 kB as a safety net against row bloat.
+	r.SettingsJSON = truncate(r.SettingsJSON, 1024)
+
+	// Clients should never set ID/CreatedAt/ClientIP/UserAgent — the server
+	// overwrites those after this function returns. Zero them out to avoid
+	// any accidental persistence of a forged value.
+	r.ID = 0
+	r.CreatedAt = 0
+	r.ClientIP = ""
+	r.UserAgent = ""
+}
+
+// clampFloat returns v constrained to [lo, hi]. NaN and ±Inf return lo.
+func clampFloat(v, lo, hi float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// truncate caps s at n bytes. Multibyte-safe in the sense that it cuts on a
+// UTF-8 boundary by trimming any trailing run of continuation bytes.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	// Walk back to a UTF-8 boundary (a byte whose top bits are not 10xxxxxx).
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+	return s[:cut]
 }
 
 // parseQueryInt parses an int from r.URL.Query()[key], returning def when

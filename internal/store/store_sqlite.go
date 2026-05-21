@@ -42,6 +42,12 @@ func Open(path string) (*SQLite, error) {
 		return nil, fmt.Errorf("store: open sqlite at %q: %w", path, err)
 	}
 
+	// SQLite is a single-writer engine. Capping the pool at one connection
+	// avoids contention on the write lock — `database/sql` would otherwise
+	// open arbitrarily many connections under load, each blocking on the
+	// busy_timeout. One connection + WAL still allows reads to make progress.
+	db.SetMaxOpenConns(1)
+
 	// modernc.org/sqlite returns errors lazily; ping forces a real connection
 	// so misconfiguration (e.g. unwritable directory) fails fast at startup.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -120,29 +126,6 @@ LIMIT ? OFFSET ?
 	rows, err := s.db.QueryContext(ctx, q, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("store: list: %w", err)
-	}
-	defer rows.Close()
-	return scanRows(rows)
-}
-
-// Range returns all results with CreatedAt in [fromMs, toMs], newest first.
-func (s *SQLite) Range(ctx context.Context, fromMs, toMs int64) ([]Result, error) {
-	if toMs < fromMs {
-		return []Result{}, nil
-	}
-	const q = `
-SELECT id, created_at, download_mbps, upload_mbps,
-       latency_idle_ms, latency_loaded_ms,
-       download_jitter_ms, upload_jitter_ms,
-       packet_loss, bufferbloat_grade,
-       client_ip, user_agent, settings_json
-FROM results
-WHERE created_at >= ? AND created_at <= ?
-ORDER BY created_at DESC, id DESC
-`
-	rows, err := s.db.QueryContext(ctx, q, fromMs, toMs)
-	if err != nil {
-		return nil, fmt.Errorf("store: range: %w", err)
 	}
 	defer rows.Close()
 	return scanRows(rows)

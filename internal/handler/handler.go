@@ -308,13 +308,21 @@ func ClientIP(r *http.Request) string {
 	}
 
 	if isPrivateOrLoopback(host) {
+		// The forwarded headers are attacker-controllable in any deployment
+		// where a proxy header is forwarded verbatim — even from a private
+		// peer. Validate the value parses as a real IP before accepting it,
+		// otherwise fall back to the direct peer. This stops the spoofed
+		// value from polluting logs / DB rows / CSV exports.
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if ip := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0]); ip != "" {
-				return ip
+			candidate := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
+			if parsed := net.ParseIP(candidate); parsed != nil {
+				return parsed.String()
 			}
 		}
 		if xri := r.Header.Get("X-Real-Ip"); xri != "" {
-			return xri
+			if parsed := net.ParseIP(strings.TrimSpace(xri)); parsed != nil {
+				return parsed.String()
+			}
 		}
 	}
 

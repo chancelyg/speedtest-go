@@ -644,7 +644,7 @@ body {
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
   border-radius: 10px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-card);
   font-size: 13px;
   font-weight: 500;
   opacity: 0;
@@ -708,7 +708,7 @@ body {
 }
 .toast-close:hover {
   color: var(--text);
-  background: var(--surface2);
+  background: var(--surface-2);
 }
 
 @media (prefers-reduced-motion: reduce) {
