@@ -351,6 +351,13 @@ const gaugeNodes = {};
 const pendingSpeed = { download: null, upload: null };
 let speedRafScheduled = false;
 
+// === [F2: chart instance] ===
+// Real-time speed-over-time chart instance. Populated on DOMContentLoaded;
+// read by runTest / measureDownload / measureUpload to push samples and
+// reset between runs. Null before mount → all call sites guard.
+let speedChart = null;
+// === [F2 end] ===
+
 function flushSpeed() {
   speedRafScheduled = false;
   for (const prefix of ['download', 'upload']) {
@@ -561,8 +568,11 @@ async function measureDownload(signal) {
       const elapsedMs = now - measureStart;
       const mbps      = throughputMbps(totalReceived, elapsedMs);
       setSpeed('download', mbps);
-      // === [F2: chart push DL] === F2 pushes (now - measureStart, mbps, null)
-      // to speedChart.pushPoint() so the line chart fills during download.
+      // === [F2: chart push DL] ===
+      // Push the current download throughput sample onto the speed chart.
+      // upload value is null here so the upload polyline stays flat (gap)
+      // during the download phase.
+      if (speedChart) speedChart.pushPoint(elapsedMs, mbps, null);
       // === [F2 end] ===
       // === [F1: slow-start trim] ===
       // Record (elapsedMs, cumulative bytes) so the final number can be
@@ -702,8 +712,11 @@ async function measureUpload(signal) {
     const elapsedMs = now - measureStart;
     const mbps      = throughputMbps(totalSent, elapsedMs);
     setSpeed('upload', mbps);
-    // === [F2: chart push UL] === F2 pushes (now - measureStart, null, mbps)
-    // to speedChart.pushPoint() so the line chart fills during upload.
+    // === [F2: chart push UL] ===
+    // Push the current upload throughput sample onto the speed chart.
+    // download value is null here so the download polyline stays flat (gap)
+    // during the upload phase.
+    if (speedChart) speedChart.pushPoint(elapsedMs, null, mbps);
     // === [F2 end] ===
     // === [F1: slow-start trim] ===
     // Record (elapsedMs, cumulative bytes) for the same post-warmup
@@ -788,7 +801,12 @@ async function runTest() {
   // === [F1 end] ===
 
   // === [F2: chart reset] ===
-  // F2 should clear the speed-over-time chart and unhide #speed-chart-card.
+  // Clear the speed-over-time chart and unhide its container before each run.
+  // `speedChart` is null until DOMContentLoaded mounts it — guard accordingly
+  // so calls during early-abort scenarios don't throw.
+  if (speedChart) speedChart.reset();
+  const chartCard = $('speed-chart-card');
+  if (chartCard) chartCard.hidden = false;
   // === [F2 end] ===
 
   // Background ping loop — runs for the entire test so latency/jitter/loss
@@ -908,9 +926,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch { /* IP is a nice-to-have; don't toast on its failure */ }
 
   // === [F2: mount speed chart] ===
-  // F2 wires renderChart(#speed-chart) and stashes the instance for runTest
-  // to call instance.pushPoint() / reset(). Keep the instance in a module-
-  // scoped `let speedChart = null;` declared in the F2 region above.
+  // Mount the real-time speed-over-time chart. Default maxPoints sized for
+  // a 60 s window at ~100 ms cadence; downloadByTime / uploadByTime will
+  // push at the frequency of the underlying TCP read events.
+  const chartEl = $('speed-chart');
+  if (chartEl) {
+    speedChart = renderChart(chartEl, { maxPoints: 600, maxTimeMs: 60_000 });
+  }
   // === [F2 end] ===
 
   // === [F3: mount history drawer + trends panel] ===

@@ -725,3 +725,76 @@ body {
     top: 12px;
   }
 }
+
+/* ── Speed-over-time chart (F2) ─────────────────────────────────────────── */
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 18px 14px;
+  box-shadow: var(--shadow-card);
+  animation: fadeUp 280ms ease-out both;
+}
+
+.speed-chart {
+  width: 100%;
+  height: 200px;
+  display: block;
+  overflow: visible;
+}
+
+.chart-grid-line {
+  stroke: var(--border);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+  pointer-events: none;
+}
+
+.chart-grid-line-v {
+  stroke-dasharray: 2 4;
+  opacity: 0.6;
+}
+
+[data-theme="dark"] .chart-grid-line {
+  stroke: rgba(255, 255, 255, 0.06);
+}
+
+.chart-tick-label {
+  fill: var(--text-muted);
+  font-size: 10px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  transition: stroke-dashoffset 80ms linear;
+}
+
+.chart-line-dl {
+  stroke: var(--download-to);
+  filter: drop-shadow(0 0 4px rgba(0, 212, 255, 0.35));
+}
+
+.chart-line-ul {
+  stroke: var(--upload-to);
+  filter: drop-shadow(0 0 4px rgba(236, 72, 153, 0.30));
+}
+
+[data-theme="dark"] .chart-line-dl {
+  filter: drop-shadow(0 0 6px rgba(0, 212, 255, 0.55));
+}
+[data-theme="dark"] .chart-line-ul {
+  filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.50));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-card { animation: none; }
+  .chart-line { transition: none; }
+}
