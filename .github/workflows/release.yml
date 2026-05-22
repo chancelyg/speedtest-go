@@ -6,7 +6,12 @@ on:
       - 'v*'
 
 permissions:
+  # contents: write — needed to create the GitHub release + upload assets.
+  # packages: write — needed to push the multi-arch Docker manifest to ghcr.io.
+  # id-token: write — reserved for future cosign keyless signing; harmless now.
   contents: write
+  packages: write
+  id-token: write
 
 jobs:
   release:
@@ -27,11 +32,65 @@ jobs:
       - name: Run tests
         run: go test ./... -count=1
 
+      # QEMU + buildx are required by the `dockers:` block in .goreleaser.yaml
+      # which cross-builds the linux/arm64 image on this amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Push target for the multi-arch manifest in .goreleaser.yaml.
+      # GITHUB_TOKEN is provisioned automatically with packages:write above.
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Syft is required by the `sboms:` block (CycloneDX generation).
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      # GPG signing of checksums is optional: only runs when the repo has a
+      # GPG_PRIVATE_KEY secret configured. If absent, we pass --skip=sign to
+      # goreleaser so the release still proceeds (archives, sboms, dockers).
+      - name: Import GPG key
+        id: gpg
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Determine goreleaser skip flags
+        id: skip
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          flags=""
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            flags="sign"
+          fi
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean
+          args: >-
+            release --clean
+            ${{ steps.skip.outputs.flags != '' && format('--skip={0}', steps.skip.outputs.flags) || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # When GPG is configured, the import step exports GPG_FINGERPRINT
+          # via crazy-max/ghaction-import-gpg's outputs. Pass it through to
+          # goreleaser's sign args. When GPG is not configured, the value is
+          # empty and signing is skipped via --skip=sign above, so the empty
+          # template substitution does not reach `gpg`.
+          GPG_FINGERPRINT: ${{ steps.gpg.outputs.fingerprint }}
