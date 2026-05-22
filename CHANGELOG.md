@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-22
+
 ### Added
 
 - PWA support: installable manifest + service worker for offline shell.
@@ -52,4 +54,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CSV-injection prevention for exported result files (leading `=`, `+`,
     `-`, `@`, tab, CR characters in cell values are neutralised).
 
-[Unreleased]: https://github.com/chancelyg/speedtest-go/compare/HEAD...HEAD
+### Fixed
+
+- `IdleTimeout` no longer truncates long tests; it now scales with the
+  configured test duration plus a 60 s safety margin so a `?duration=300`
+  run completes instead of being closed at 120 s.
+- Upload responses now reply `200` with a `truncated` flag and the partial
+  byte count when the body exceeds the cap, instead of returning `413`.
+  Gigabit-class samples that previously looked like failures now produce
+  usable throughput numbers.
+- Download and upload responses send `Content-Encoding: identity` so
+  transparent gzip-aware proxies cannot distort the throughput sample.
+- `uploadResponse` exposes `serverElapsedMs`; the front-end uses the
+  server-observed wall-clock for the final upload number, sidestepping
+  client-side timing weirdness like tab throttling.
+- The packet-loss metric now ships with an i18n tooltip clarifying that
+  the figure is the HTTP request failure rate, not UDP packet loss.
+
+[Unreleased]: https://github.com/chancelyg/speedtest-go/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/chancelyg/speedtest-go/compare/v0.0.2...v0.1.0
