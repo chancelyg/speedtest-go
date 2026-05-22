@@ -163,6 +163,19 @@ func newServer(cfg *config.Config) *http.Server {
 	return newServerWithStore(cfg, nil)
 }
 
+// idleTimeout returns a keep-alive idle timeout long enough that a maximum-
+// length test (?duration=300) plus the surrounding multi-phase orchestration
+// (idle ping → download → loaded ping → upload) cannot be cut off by the
+// server. The 60 s margin accommodates inter-phase gaps and pre-flight
+// requests reusing the same connection.
+func idleTimeout(testDuration time.Duration) time.Duration {
+	const maxTestDuration = 300 * time.Second
+	if testDuration < maxTestDuration {
+		testDuration = maxTestDuration
+	}
+	return testDuration + 60*time.Second
+}
+
 // newServerWithStore is the full constructor used by main(). Tests that need
 // the history endpoints wired in pass a non-nil store.
 func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
@@ -181,7 +194,12 @@ func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
 		ReadHeaderTimeout: 30 * time.Second,
 		ReadTimeout:       0,
 		WriteTimeout:      0,
-		IdleTimeout:       120 * time.Second,
+		// IdleTimeout must outlive the longest possible test. maxDurationSecs
+		// (300 s) is the hard ceiling for ?duration=, and the UI can run
+		// multi-phase tests (idle ping → download → loaded ping → upload) over
+		// the same keep-alive connection, so we add a 60 s safety margin.
+		// A flat 120 s here would silently close mid-test on long runs.
+		IdleTimeout: idleTimeout(cfg.Duration),
 	}
 }
 

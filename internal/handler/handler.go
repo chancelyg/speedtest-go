@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -224,6 +225,9 @@ func (h *Handler) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Cache-Control", "no-store")
+	// Identity hints stop transparent gzip-aware proxies from attempting to
+	// compress our random payload, which would skew throughput measurements.
+	w.Header().Set("Content-Encoding", "identity")
 
 	// Allow frontend to override size per-request. `bytes` is used when the UI
 	// splits a size-mode test across multiple parallel streams.
@@ -304,12 +308,23 @@ func (h *Handler) downloadByTime(w http.ResponseWriter, duration time.Duration) 
 // ── /api/upload ───────────────────────────────────────────────────────────
 
 type uploadResponse struct {
-	Received int64 `json:"received"`
+	Received        int64 `json:"received"`
+	ServerElapsedMs int64 `json:"serverElapsedMs"`
+	// Truncated is true when the body hit maxUploadBytes mid-stream. The
+	// client should still treat Received/ServerElapsedMs as a valid
+	// throughput sample, but may want to surface that the cap was reached.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // UploadHandler discards the request body and returns the byte count so the
 // client can compute upload throughput. Only POST is accepted.
 // The body is capped at maxUploadBytes to prevent unbounded resource use.
+//
+// When the body exceeds the cap, the handler still responds 200 with the
+// partial byte count and a Truncated flag. Returning 413 (the previous
+// behaviour) made gigabit-class uploads look like outright failures once they
+// crossed the 10 GB cap, even though the wire bytes already constitute a
+// valid throughput sample.
 func (h *Handler) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -325,19 +340,36 @@ func (h *Handler) UploadHandler(w http.ResponseWriter, r *http.Request) {
 	var received int64
 	defer func() { h.ObserveTest("up", received, time.Since(started)) }()
 
+	// Identity hints prevent transparent reverse proxies from gzip-encoding
+	// our random payload mid-stream, which would distort the throughput
+	// measurement. The bytes themselves are incompressible, but the
+	// header negotiation removes any ambiguity.
+	w.Header().Set("Content-Encoding", "identity")
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	n, err := io.Copy(io.Discard, r.Body)
 	received = n
+
+	var truncated bool
 	if err != nil {
-		// MaxBytesReader returns an error when the limit is exceeded.
-		// Return 413 immediately; the partial byte count is not reported
-		// because the client exceeded the hard cap and the result would
-		// be meaningless for throughput measurement.
-		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
-		return
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			// Hard cap reached. Report the bytes we did receive so the client
+			// can still compute throughput, and flag the truncation.
+			truncated = true
+		} else {
+			// Other body errors (client disconnect, malformed framing, …) are
+			// reported as a server error so the client can retry.
+			http.Error(w, "upload failed", http.StatusBadRequest)
+			return
+		}
 	}
 
-	writeJSON(w, uploadResponse{Received: received})
+	writeJSON(w, uploadResponse{
+		Received:        received,
+		ServerElapsedMs: time.Since(started).Milliseconds(),
+		Truncated:       truncated,
+	})
 }
 
 // ── ClientIP (package-level, used by tests directly) ─────────────────────

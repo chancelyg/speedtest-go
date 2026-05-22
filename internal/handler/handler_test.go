@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -340,10 +341,138 @@ func TestUploadHandlerReturnsBytesReceived(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.UploadHandler(w, req)
 
-	var body map[string]int64
-	json.NewDecoder(w.Result().Body).Decode(&body)
-	if body["received"] != int64(size) {
-		t.Errorf("received = %d, want %d", body["received"], size)
+	var body struct {
+		Received        int64 `json:"received"`
+		ServerElapsedMs int64 `json:"serverElapsedMs"`
+		Truncated       bool  `json:"truncated"`
+	}
+	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Received != int64(size) {
+		t.Errorf("received = %d, want %d", body.Received, size)
+	}
+	if body.ServerElapsedMs < 0 {
+		t.Errorf("serverElapsedMs = %d, want >= 0", body.ServerElapsedMs)
+	}
+	if body.Truncated {
+		t.Errorf("truncated = true, want false for under-cap upload")
+	}
+}
+
+// maxBytesErrReader yields one byte then signals the MaxBytesReader limit
+// has been hit. Used to exercise the truncation branch in UploadHandler
+// without allocating the real 10 GB cap.
+type maxBytesErrReader struct{ delivered bool }
+
+func (r *maxBytesErrReader) Read(p []byte) (int, error) {
+	if !r.delivered {
+		r.delivered = true
+		p[0] = 'q'
+		return 1, nil
+	}
+	return 0, &http.MaxBytesError{Limit: 1}
+}
+func (r *maxBytesErrReader) Close() error { return nil }
+
+// Fix-B regression: when the body exceeds the upload cap the handler must
+// still respond 200 with the partial byte count and Truncated=true, instead
+// of the previous 413. Returning 413 turned valid gigabit-class samples into
+// outright failures once they crossed the 10 GB cap.
+func TestUploadHandlerOverCapReturnsTruncated(t *testing.T) {
+	h := handler.New(sizeCfg(25, 10), nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/upload", nil)
+	req.Body = &maxBytesErrReader{}
+	w := httptest.NewRecorder()
+	h.UploadHandler(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (truncation must not be a failure)", w.Code)
+	}
+	var body struct {
+		Received        int64 `json:"received"`
+		ServerElapsedMs int64 `json:"serverElapsedMs"`
+		Truncated       bool  `json:"truncated"`
+	}
+	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Received != 1 {
+		t.Errorf("received = %d, want 1 (the byte delivered before cap)", body.Received)
+	}
+	if !body.Truncated {
+		t.Errorf("truncated = false, want true when MaxBytesError fired")
+	}
+}
+
+// Fix-C regression: download responses must set Content-Encoding: identity so
+// intermediate gzip-aware proxies don't try to compress the random payload.
+func TestDownloadHandlerSetsIdentityEncoding(t *testing.T) {
+	h := handler.New(sizeCfg(1, 10), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/download?bytes=1024", nil)
+	w := httptest.NewRecorder()
+	h.DownloadHandler(w, req)
+	if ce := w.Result().Header.Get("Content-Encoding"); ce != "identity" {
+		t.Errorf("Content-Encoding = %q, want %q", ce, "identity")
+	}
+}
+
+// Fix-C regression: same identity hint on upload responses.
+func TestUploadHandlerSetsIdentityEncoding(t *testing.T) {
+	h := handler.New(sizeCfg(25, 10), nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/upload", strings.NewReader("x"))
+	w := httptest.NewRecorder()
+	h.UploadHandler(w, req)
+	if ce := w.Result().Header.Get("Content-Encoding"); ce != "identity" {
+		t.Errorf("Content-Encoding = %q, want %q", ce, "identity")
+	}
+}
+
+// Fix-G regression: end-to-end throughput math sanity check. Boots a real
+// HTTP server, requests a known-size payload, times the read, and asserts the
+// computed Mbps falls in a wide-but-non-trivial range. The point is not to
+// benchmark the host — it is to catch regressions where the handler returns
+// far fewer bytes than promised, or the elapsed/byte math drifts.
+func TestThroughputMath(t *testing.T) {
+	h := handler.New(sizeCfg(1, 1), nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/download", h.DownloadHandler)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	const wantBytes = 1 << 20 // 1 MB exact
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/download?bytes="+strconv.Itoa(wantBytes), nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	started := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	n, err := io.Copy(io.Discard, resp.Body)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("copy: %v", err)
+	}
+	if n != int64(wantBytes) {
+		t.Fatalf("bytes = %d, want %d", n, wantBytes)
+	}
+	if elapsed <= 0 {
+		t.Fatalf("elapsed = %v, want > 0", elapsed)
+	}
+
+	mbps := float64(n*8) / elapsed.Seconds() / 1e6
+	// Loopback should clear at least 50 Mbps even on a heavily loaded CI
+	// runner — well below the gigabit-class numbers a real machine sees,
+	// but high enough to catch order-of-magnitude regressions.
+	if mbps < 50 {
+		t.Errorf("throughput = %.2f Mbps for %d bytes in %v, want >= 50 Mbps", mbps, n, elapsed)
 	}
 }
 

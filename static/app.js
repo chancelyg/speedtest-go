@@ -40,6 +40,7 @@ const i18n = {
     unknownError: '未知错误',
     retry:        '重试',
     bufferbloat:  'Bufferbloat',
+    hintLossHTTP: '基于 HTTP 请求失败率，并非 UDP 丢包率',
   },
   en: {
     title:        'Speedtest',
@@ -74,6 +75,7 @@ const i18n = {
     unknownError: 'Unknown error',
     retry:        'Retry',
     bufferbloat:  'Bufferbloat',
+    hintLossHTTP: 'Based on HTTP request failure rate, not UDP packet loss',
   },
 };
 
@@ -245,6 +247,9 @@ function applyLang() {
   $('download-jitter-label').textContent  = t('jitter');
   $('upload-jitter-label').textContent    = t('jitter');
   $('packet-loss-label').textContent      = t('packetLoss');
+  // Keep the loss-semantic tooltip translated alongside the label.
+  const lossHint = $('packet-loss-hint');
+  if (lossHint) lossHint.title = t('hintLossHTTP');
   // === [F1: bufferbloat label i18n] ===
   const bbLabel = $('bufferbloat-label');
   if (bbLabel) bbLabel.textContent = t('bufferbloat');
@@ -657,7 +662,18 @@ function postBlobUntil(blob, onProgress, signal, deadlineMs) {
     xhr.addEventListener('load', () => {
       cleanup();
       if (xhr.status >= 200 && xhr.status < 400) {
-        resolve({ aborted: false });
+        // Parse the server's timing reply when available. serverElapsedMs +
+        // received let the caller cross-check the client-side onProgress
+        // numbers against authoritative server-observed bytes/time, side-
+        // stepping any wall-clock weirdness from tab throttling.
+        let server = null;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body && typeof body.received === 'number' && typeof body.serverElapsedMs === 'number') {
+            server = { received: body.received, serverElapsedMs: body.serverElapsedMs, truncated: !!body.truncated };
+          }
+        } catch { /* non-JSON or empty body — fall back to client timing */ }
+        resolve({ aborted: false, server });
       } else {
         const err = new Error('upload XHR status ' + xhr.status);
         err.httpStatus = xhr.status;
@@ -667,12 +683,12 @@ function postBlobUntil(blob, onProgress, signal, deadlineMs) {
     xhr.addEventListener('abort', () => {
       cleanup();
       if (externalAbort)    reject(new DOMException('Aborted', 'AbortError'));
-      else if (endedByDeadline) resolve({ aborted: true });
+      else if (endedByDeadline) resolve({ aborted: true, server: null });
       else                  reject(new Error('upload XHR aborted unexpectedly'));
     });
     xhr.addEventListener('error', () => {
       cleanup();
-      if (endedByDeadline) resolve({ aborted: true });
+      if (endedByDeadline) resolve({ aborted: true, server: null });
       else {
         // No usable status on a network error — fetch's TypeError analogue.
         const err = new TypeError('upload XHR error');
@@ -701,6 +717,11 @@ async function measureUpload(signal) {
   // Same fixed-start approach as download.
   const measureStart = activeCfg.mode === 'size' ? t0 : t0 + WARMUP_MS;
   let totalSent      = 0;
+  // Server-authoritative tallies (aggregated across all streams/chunks).
+  // Used to override the client-timed final number when available, which
+  // dodges any browser-side clock drift or tab-throttling weirdness.
+  let serverReceivedTotal  = 0;
+  let serverElapsedMaxMs   = 0;
 
   const onChunk = (delta, now) => {
     if (now < measureStart) return;
@@ -715,6 +736,17 @@ async function measureUpload(signal) {
     // === [F1 end] ===
   };
 
+  const recordServerTiming = result => {
+    if (result?.server) {
+      serverReceivedTotal += result.server.received;
+      // Streams run in parallel — max elapsed across streams is the true
+      // wall-clock the server saw end-to-end.
+      if (result.server.serverElapsedMs > serverElapsedMaxMs) {
+        serverElapsedMaxMs = result.server.serverElapsedMs;
+      }
+    }
+  };
+
   const workerSize = async () => {
     let remaining = Math.ceil(activeCfg.uploadMB * 1024 * 1024 / streams);
     while (remaining > 0 && !signal.aborted) {
@@ -723,11 +755,12 @@ async function measureUpload(signal) {
         : uploadChunk.subarray(0, remaining);
       remaining -= slice.byteLength;
       let lastLoaded = 0;
-      await postBlobUntil(new Blob([slice]), e => {
+      const result = await postBlobUntil(new Blob([slice]), e => {
         if (!e.lengthComputable) return;
         onChunk(e.loaded - lastLoaded, performance.now());
         lastLoaded = e.loaded;
       }, signal, Infinity);
+      recordServerTiming(result);
     }
   };
 
@@ -735,12 +768,13 @@ async function measureUpload(signal) {
     const deadline = t0 + activeCfg.durationSecs * 1000;
     while (performance.now() < deadline && !signal.aborted) {
       let lastLoaded = 0;
-      const { aborted } = await postBlobUntil(new Blob([uploadChunk]), e => {
+      const result = await postBlobUntil(new Blob([uploadChunk]), e => {
         if (!e.lengthComputable) return;
         onChunk(e.loaded - lastLoaded, performance.now());
         lastLoaded = e.loaded;
       }, signal, deadline);
-      if (aborted) break;     // deadline reached mid-upload
+      recordServerTiming(result);
+      if (result.aborted) break;     // deadline reached mid-upload
     }
   };
 
@@ -748,7 +782,15 @@ async function measureUpload(signal) {
   await Promise.all(Array.from({ length: streams }, worker));
 
   // === [F1: slow-start trim — final throughput] ===
-  return trimThroughput(ulThroughputSamples, totalSent, performance.now() - measureStart);
+  const clientMbps = trimThroughput(ulThroughputSamples, totalSent, performance.now() - measureStart);
+  // Prefer the server's authoritative wall-clock when we have enough samples
+  // (>= 100 ms and at least one full chunk acknowledged). For very short or
+  // aborted uploads the client-side trim is more accurate because it covers
+  // the in-flight bytes the server never saw acknowledged.
+  if (serverReceivedTotal > 0 && serverElapsedMaxMs >= 100) {
+    return throughputMbps(serverReceivedTotal, serverElapsedMaxMs);
+  }
+  return clientMbps;
   // === [F1 end] ===
 }
 

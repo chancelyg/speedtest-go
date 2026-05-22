@@ -346,6 +346,18 @@ body {
   font-weight: 600;
 }
 
+/* Inline info marker rendered next to a metric label. Plain text glyph + tooltip
+   via `title=` — keeps it accessible without a JS popover. */
+.metric-hint {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: help;
+  opacity: 0.7;
+}
+.metric-hint:hover { opacity: 1; }
+
 .metric-value {
   font-size: 17px;
   font-weight: 600;
