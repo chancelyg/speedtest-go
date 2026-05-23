@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-23
+
+### Added
+
+- Touch-friendly hint tooltips on every metric tile (latency, jitter,
+  packet loss, Bufferbloat, IP, connection type). A shared overlay is
+  positioned in viewport coordinates and clamped to the screen so long
+  Chinese / English strings never overflow on narrow phones. Triggers on
+  hover, focus, and tap-to-toggle (Esc / outside-click to dismiss).
+
+### Fixed
+
+- Time-mode tests now end at the user-selected duration even on slow
+  links. `downloadByTime` previously wrote in 1 MB chunks and only
+  checked the deadline at the top of the loop, so a Write blocked on a
+  full TCP send buffer could keep the response open for tens of seconds
+  past the configured duration. The handler now writes in 64 KB chunks
+  and installs a `SetWriteDeadline` via `http.NewResponseController`
+  (with the logging middleware now exposing `Unwrap()` so the deadline
+  reaches the underlying conn). The frontend mirrors the cap with an
+  `AbortController` for defence in depth.
+- Latency and jitter shown at the end of each phase are now averaged
+  across every ping taken during that phase instead of only the trailing
+  ~5 s rolling window, so the numbers reflect the whole phase rather
+  than the few seconds right before the test ended. Packet loss keeps
+  its rolling window since recency matters more there.
+
 ## [0.1.0] - 2026-05-22
 
 ### Added
