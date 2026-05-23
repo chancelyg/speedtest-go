@@ -346,17 +346,62 @@ body {
   font-weight: 600;
 }
 
-/* Inline info marker rendered next to a metric label. Plain text glyph + tooltip
-   via `title=` — keeps it accessible without a JS popover. */
-.metric-hint {
-  display: inline-block;
-  margin-left: 4px;
-  font-size: 10px;
+/* Inline group keeping the label and its tooltip glyph on one row inside
+   the column-direction `.metric` flex container. */
+.metric-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Info glyph next to a label. Triggers the shared #tooltip-overlay
+   popover (see tooltips.mjs); native `title=` would not fire on mobile
+   touch, which is the platform that needs the explanation most. */
+.hint {
+  appearance: none;
+  -webkit-appearance: none;
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
   color: var(--text-muted);
   cursor: help;
   opacity: 0.7;
+  border-radius: 50%;
+  transition: opacity 120ms ease-out;
+  /* Stops the gauge-stat / metric-head flex from stretching the round
+     focus ring into a pill. */
+  flex: 0 0 auto;
 }
-.metric-hint:hover { opacity: 1; }
+.hint:hover,
+.hint:focus-visible { opacity: 1; outline: none; }
+.hint:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent, #4a90e2);
+}
+
+/* Shared overlay positioned in viewport coordinates by tooltips.mjs.
+   Constrained width so a long string wraps instead of overflowing the
+   screen on a narrow phone. */
+#tooltip-overlay {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(240px, calc(100vw - 16px));
+  padding: 8px 10px;
+  /* Inverted-surface popover: stays legible against both light and dark
+     page themes without needing per-theme overrides. */
+  background: rgba(15, 23, 42, 0.95);
+  color: #f1f5f9;
+  font-size: 12px;
+  line-height: 1.45;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  pointer-events: none;
+  white-space: normal;
+  word-break: break-word;
+}
+#tooltip-overlay[hidden] { display: none; }
 
 .metric-value {
   font-size: 17px;

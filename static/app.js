@@ -2,6 +2,7 @@
 
 import { gaugeAngle, windowStats, pushWindow, throughputMbps, jitterRFC3550 } from './metrics.mjs';
 import { mountToast } from './toast.mjs';
+import { mountTooltips, refreshTooltips } from './tooltips.mjs';
 
 import { mountHistory } from './history.mjs'; // F3: paginated history drawer
 
@@ -40,7 +41,12 @@ const i18n = {
     unknownError: '未知错误',
     retry:        '重试',
     bufferbloat:  'Bufferbloat',
-    hintLossHTTP: '基于 HTTP 请求失败率，并非 UDP 丢包率',
+    hintLatency:     '一次请求往返时间，越低越好。显示的是整段测试期间的平均值。',
+    hintJitter:      '延迟波动幅度，越低越稳定。采用 RFC 3550 平滑算法计算。',
+    hintLoss:        '基于 HTTP 请求失败率，并非 UDP 丢包率。',
+    hintBufferbloat: '负载下延迟比空闲时上升的程度。A 最好、F 最差。',
+    hintIP:          '服务器看到的客户端公网 IP，反向代理后会显示代理识别的真实地址。',
+    hintConn:        '浏览器上报的网络类型，仅作参考（部分浏览器不提供）。',
   },
   en: {
     title:        'Speedtest',
@@ -75,7 +81,12 @@ const i18n = {
     unknownError: 'Unknown error',
     retry:        'Retry',
     bufferbloat:  'Bufferbloat',
-    hintLossHTTP: 'Based on HTTP request failure rate, not UDP packet loss',
+    hintLatency:     'Round-trip time per request, lower is better. Averaged across the whole test phase.',
+    hintJitter:      'Variation in latency, lower is steadier. Computed with the RFC 3550 smoothing formula.',
+    hintLoss:        'Based on HTTP request failure rate, not UDP packet loss.',
+    hintBufferbloat: 'How much latency rises under load vs. idle. A is best, F is worst.',
+    hintIP:          'Client public IP as seen by the server; behind a reverse proxy this is the forwarded address.',
+    hintConn:        'Network type reported by the browser. Indicative only — not all browsers expose it.',
   },
 };
 
@@ -247,15 +258,15 @@ function applyLang() {
   $('download-jitter-label').textContent  = t('jitter');
   $('upload-jitter-label').textContent    = t('jitter');
   $('packet-loss-label').textContent      = t('packetLoss');
-  // Keep the loss-semantic tooltip translated alongside the label.
-  const lossHint = $('packet-loss-hint');
-  if (lossHint) lossHint.title = t('hintLossHTTP');
   // === [F1: bufferbloat label i18n] ===
   const bbLabel = $('bufferbloat-label');
   if (bbLabel) bbLabel.textContent = t('bufferbloat');
   // === [F1 end] ===
   $('ip-label').textContent          = t('ip');
   $('connection-label').textContent  = t('connection');
+  // Refresh hint glyph tooltips from the new language strings. Safe
+  // before mountTooltips() — only the data attribute is touched.
+  refreshTooltips(t);
   $('footer-text').textContent       = t('footer');
   $('lang-toggle').textContent       = t('langBtn');
   $('stop-text').textContent         = t('stop');
@@ -1017,6 +1028,9 @@ $('start-btn').addEventListener('click', runTest);
 
 /* ── Init ────────────────────────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', async () => {
+  // Tooltip popover is mounted first so that the language pass below
+  // (which calls refreshTooltips) finds the overlay already wired up.
+  mountTooltips();
   applyLang();
 
   // Mount the toast container as early as possible so subsequent bootstrap

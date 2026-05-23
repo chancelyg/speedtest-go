@@ -72,10 +72,12 @@
           <div class="gauge-stats">
             <span class="gauge-stat">
               <span class="gauge-stat-label" id="download-latency-label">延迟</span>
+              <button type="button" class="hint" data-tooltip-key="hintLatency" aria-label="说明">ⓘ</button>
               <span class="gauge-stat-value" id="download-latency">--</span>
             </span>
             <span class="gauge-stat">
               <span class="gauge-stat-label" id="download-jitter-label">抖动</span>
+              <button type="button" class="hint" data-tooltip-key="hintJitter" aria-label="说明">ⓘ</button>
               <span class="gauge-stat-value" id="download-jitter">--</span>
             </span>
           </div>
@@ -119,10 +121,12 @@
           <div class="gauge-stats">
             <span class="gauge-stat">
               <span class="gauge-stat-label" id="upload-latency-label">延迟</span>
+              <button type="button" class="hint" data-tooltip-key="hintLatency" aria-label="说明">ⓘ</button>
               <span class="gauge-stat-value" id="upload-latency">--</span>
             </span>
             <span class="gauge-stat">
               <span class="gauge-stat-label" id="upload-jitter-label">抖动</span>
+              <button type="button" class="hint" data-tooltip-key="hintJitter" aria-label="说明">ⓘ</button>
               <span class="gauge-stat-value" id="upload-jitter">--</span>
             </span>
           </div>
@@ -132,21 +136,32 @@
       <!-- Metrics strip -->
       <section class="metrics-card">
         <div class="metric">
-          <span class="metric-label" id="packet-loss-label">丢包率</span>
-          <span class="metric-hint" id="packet-loss-hint" title="基于 HTTP 请求失败率，并非 UDP 丢包率">ⓘ</span>
+          <span class="metric-head">
+            <span class="metric-label" id="packet-loss-label">丢包率</span>
+            <button type="button" class="hint" data-tooltip-key="hintLoss" aria-label="说明">ⓘ</button>
+          </span>
           <span class="metric-value" id="packet-loss">--</span>
         </div>
         <!-- === [F1: bufferbloat-grade] populated by Phase 2 agent F1 === -->
         <div class="metric" id="bufferbloat-grade-cell" hidden>
-          <span class="metric-label" id="bufferbloat-label">Bufferbloat</span>
+          <span class="metric-head">
+            <span class="metric-label" id="bufferbloat-label">Bufferbloat</span>
+            <button type="button" class="hint" data-tooltip-key="hintBufferbloat" aria-label="说明">ⓘ</button>
+          </span>
           <span class="metric-value" id="bufferbloat-grade">--</span>
         </div>
         <div class="metric">
-          <span class="metric-label" id="ip-label">IP 地址</span>
+          <span class="metric-head">
+            <span class="metric-label" id="ip-label">IP 地址</span>
+            <button type="button" class="hint" data-tooltip-key="hintIP" aria-label="说明">ⓘ</button>
+          </span>
           <span class="metric-value" id="ip-address">--</span>
         </div>
         <div class="metric">
-          <span class="metric-label" id="connection-label">连接方式</span>
+          <span class="metric-head">
+            <span class="metric-label" id="connection-label">连接方式</span>
+            <button type="button" class="hint" data-tooltip-key="hintConn" aria-label="说明">ⓘ</button>
+          </span>
           <span class="metric-value" id="connection-type">--</span>
         </div>
       </section>
