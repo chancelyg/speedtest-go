@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -286,16 +287,45 @@ func (h *Handler) downloadBySize(w http.ResponseWriter, total int) int64 {
 	return written
 }
 
+// writeChunk caps the per-Write payload. Smaller chunks keep individual
+// Writes short on slow links so the deadline check (and the
+// SetWriteDeadline on the underlying conn) can fire promptly — a single
+// 1 MB Write on a 256 Kbps uplink drains for ~30 s, which is what made
+// time-mode tests blow past their configured duration before this fix.
+const writeChunk = 64 << 10 // 64 KB
+
+// writeDeadlineGrace is the slack added to the user-selected duration
+// before the kernel-level write deadline fires. The natural exit is the
+// loop-top deadline check; the grace lets the final Flush land on healthy
+// links and only kicks in as a hard cap when a Write is stuck behind a
+// full TCP send buffer.
+const writeDeadlineGrace = 2 * time.Second
+
 func (h *Handler) downloadByTime(w http.ResponseWriter, duration time.Duration) int64 {
 	// No Content-Length: chunked transfer encoding until deadline.
 	deadline := time.Now().Add(duration)
 	flusher, canFlush := w.(http.Flusher)
 
+	// SetWriteDeadline gives us a hard cap: when the deadline passes any
+	// in-flight Write blocked on a full TCP send buffer returns with a
+	// timeout error, so a slow-link 15 s test ends within deadline + grace
+	// rather than waiting for the kernel to drain the buffer. ErrNotSupported
+	// is expected in tests (httptest.ResponseRecorder doesn't implement it)
+	// and is the only error we silently tolerate — anything else is logged
+	// because it'd mean the deadline isn't enforced on this connection.
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(deadline.Add(writeDeadlineGrace)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		slog.Warn("downloadByTime: SetWriteDeadline failed", "err", err.Error())
+	}
+
 	var written int64
+	chunk := randomPayload[:writeChunk]
 	for time.Now().Before(deadline) {
-		m, err := w.Write(randomPayload[:])
+		m, err := w.Write(chunk)
 		written += int64(m)
 		if err != nil {
+			// Deadline-induced timeout is the expected exit path on slow
+			// links — treat the bytes already on the wire as the answer.
 			return written
 		}
 		if canFlush {

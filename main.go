@@ -358,6 +358,15 @@ func (sw *statusWriter) Flush() {
 	}
 }
 
+// Unwrap exposes the wrapped ResponseWriter so http.NewResponseController
+// can reach the underlying *http.response and call SetWriteDeadline on the
+// real connection. Without this the deadline used by downloadByTime to
+// bound time-mode tests on slow links would silently no-op behind the
+// middleware (ErrNotSupported), and a 15 s test could run for 30+ s.
+func (sw *statusWriter) Unwrap() http.ResponseWriter {
+	return sw.ResponseWriter
+}
+
 // countingReader wraps an io.ReadCloser and tallies bytes read. Used by the
 // logging middleware to record request-body sizes (upload bytes) without
 // requiring the inner handler to opt in.

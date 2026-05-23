@@ -430,11 +430,14 @@ $('stop-btn').addEventListener('click', () => {
 });
 
 /* ── Latency / Jitter / Packet-loss ─────────────────────────────────────── */
-// Rolling window of the last PING_WINDOW samples. Each ping appends a
-// { rtt, ok } record; UI metrics are recomputed from the window so that
-// latency/jitter/loss update continuously through the test — including
-// while download and upload phases are competing for bandwidth (which is
-// exactly when latency-under-load matters).
+// Two sample sets per ping:
+//   - allSamples is a rolling window of the last PING_WINDOW pings, used
+//     for the live packet-loss readout (the recent loss rate is what the
+//     user is steering by during the test).
+//   - dlSamples / ulSamples are *cumulative* per-phase arrays, so the
+//     latency / jitter displayed at the end of the download or upload
+//     phase is the mean over the whole phase rather than the last few
+//     seconds (which is what a rolling window would show under load).
 const PING_WINDOW   = 20;
 const PING_INTERVAL = 250;
 
@@ -466,32 +469,29 @@ async function pingOnce(signal, seq) {
 function renderPingStats(allSamples, dlSamples, ulSamples) {
   setVal('packet-loss', windowStats(allSamples).packetLoss.toFixed(1) + ' %');
 
-  // Per-direction latency + jitter — render only once each phase has
-  // produced samples so the previous run's values aren't shown during the
-  // next phase's warmup.
+  // Per-direction latency + jitter — averaged over every ping taken during
+  // the phase (dlSamples / ulSamples are cumulative, not a rolling window),
+  // so the final readout reflects the whole phase rather than the last few
+  // seconds. Rendered only once each phase has samples so the previous
+  // run's values aren't shown during the next phase's warmup.
   if (dlSamples.length > 0) {
     const dl = windowStats(dlSamples);
     setVal('download-latency', dl.latency.toFixed(1) + ' ms');
-    // === [F1: RFC 3550 jitter] === Replace the simple mean-abs-diff jitter
-    // from windowStats with the smoothed RFC 3550 inter-packet jitter.
-    // Latency still uses windowStats' trimmed mean.
     const dlRtts = dlSamples.filter(s => s.ok).map(s => s.rtt);
     setVal('download-jitter',  jitterRFC3550(dlRtts).toFixed(1) + ' ms');
-    // === [F1 end] ===
   }
   if (ulSamples.length > 0) {
     const ul = windowStats(ulSamples);
     setVal('upload-latency', ul.latency.toFixed(1) + ' ms');
-    // === [F1: RFC 3550 jitter] ===
     const ulRtts = ulSamples.filter(s => s.ok).map(s => s.rtt);
     setVal('upload-jitter',  jitterRFC3550(ulRtts).toFixed(1) + ' ms');
-    // === [F1 end] ===
   }
 }
 
-// Run a background ping loop until signal is aborted. Maintains three
-// rolling windows: one for overall latency/loss, and one per direction so
-// jitter is computed only from samples taken during that phase.
+// Run a background ping loop until signal is aborted. Maintains a rolling
+// `allSamples` window for live packet-loss, plus *cumulative* per-direction
+// arrays so end-of-phase latency / jitter average the whole phase, not just
+// the trailing few seconds.
 async function runPingLoop(signal) {
   let allSamples = [];
   let dlSamples  = [];
@@ -502,8 +502,8 @@ async function runPingLoop(signal) {
     try {
       const sample = await pingOnce(signal, seq++);
       allSamples = pushWindow(allSamples, sample, PING_WINDOW);
-      if      (currentPhase === 'download') dlSamples = pushWindow(dlSamples, sample, PING_WINDOW);
-      else if (currentPhase === 'upload')   ulSamples = pushWindow(ulSamples, sample, PING_WINDOW);
+      if      (currentPhase === 'download') dlSamples = [...dlSamples, sample];
+      else if (currentPhase === 'upload')   ulSamples = [...ulSamples, sample];
       // === [F1: bufferbloat sample routing] ===
       // Unlike the rolling per-direction windows above (used for live UI
       // metrics), bufferbloat needs the *full* history of idle vs loaded
@@ -549,6 +549,23 @@ async function measureDownload(signal) {
   const totalBytes   = activeCfg.downloadMB * 1024 * 1024;
   let totalReceived  = 0;
 
+  // Client-side hard deadline for time mode. Mirrors the server's
+  // SetWriteDeadline so a slow link can't keep the body open past the
+  // configured duration. The 2 s grace matches the server side.
+  let deadlineCtrl  = null;
+  let deadlineTimer = 0;
+  if (activeCfg.mode === 'time') {
+    deadlineCtrl = new AbortController();
+    deadlineTimer = setTimeout(
+      () => deadlineCtrl.abort(),
+      activeCfg.durationSecs * 1000 + 2000,
+    );
+    if (signal) {
+      signal.addEventListener('abort', () => deadlineCtrl.abort(), { once: true });
+    }
+  }
+  const streamSignal = deadlineCtrl ? deadlineCtrl.signal : signal;
+
   const streamTask = async streamIndex => {
     let url = '/api/download?_=' + Date.now() + Math.random();
     if (activeCfg.mode === 'size') {
@@ -558,7 +575,7 @@ async function measureDownload(signal) {
       url += '&duration=' + activeCfg.durationSecs;
     }
 
-    const res = await fetch(url, { cache: 'no-store', signal });
+    const res = await fetch(url, { cache: 'no-store', signal: streamSignal });
     if (!res.ok || !res.body) {
       const err = new Error('download failed');
       err.httpStatus = res.status;
@@ -566,25 +583,37 @@ async function measureDownload(signal) {
     }
     const reader = res.body.getReader();
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const now = performance.now();
-      if (now < measureStart) continue;     // warmup — discard
-      totalReceived += value.byteLength;
-      const elapsedMs = now - measureStart;
-      const mbps      = throughputMbps(totalReceived, elapsedMs);
-      setSpeed('download', mbps);
-      // === [F1: slow-start trim] ===
-      // Record (elapsedMs, cumulative bytes) so the final number can be
-      // recomputed over only the post-warmup tail. The gauge above keeps
-      // rendering every sample for liveness.
-      dlThroughputSamples.push({ elapsedMs, bytes: totalReceived });
-      // === [F1 end] ===
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const now = performance.now();
+        if (now < measureStart) continue;     // warmup — discard
+        totalReceived += value.byteLength;
+        const elapsedMs = now - measureStart;
+        const mbps      = throughputMbps(totalReceived, elapsedMs);
+        setSpeed('download', mbps);
+        // === [F1: slow-start trim] ===
+        // Record (elapsedMs, cumulative bytes) so the final number can be
+        // recomputed over only the post-warmup tail. The gauge above keeps
+        // rendering every sample for liveness.
+        dlThroughputSamples.push({ elapsedMs, bytes: totalReceived });
+        // === [F1 end] ===
+      }
+    } catch (e) {
+      // Deadline-triggered abort is the expected exit on slow links —
+      // bytes counted so far are still a valid throughput sample. Only
+      // the user-initiated abort should propagate as an error.
+      if (e?.name === 'AbortError' && deadlineCtrl && !signal?.aborted) return;
+      throw e;
     }
   };
 
-  await Promise.all(Array.from({ length: streams }, (_, i) => streamTask(i)));
+  try {
+    await Promise.all(Array.from({ length: streams }, (_, i) => streamTask(i)));
+  } finally {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+  }
 
   // === [F1: slow-start trim — final throughput] ===
   // Recompute the reported throughput over only the post-warmup window by
