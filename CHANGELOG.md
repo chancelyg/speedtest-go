@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-14
+
+### Added
+
+- Source IP column in the History table (commit `35d21d0`). The peer
+  address was already stored server-side and returned by `/api/results`;
+  it's now rendered between the timestamp and the metrics so a shared
+  single-machine deployment can see which client produced each row
+  without exporting the table. Cell is muted / tabular-nums / ellipsis
+  at 180 px (110 px on narrow screens), with a `title` tooltip showing
+  the full address when truncated.
+- `/api/config` now reports `maxConcurrent` (commit `c8c1bc9`), taken
+  from `cap(h.sem)` so the `Handler.New`-coerced fallback value is
+  authoritative rather than the raw `cfg.MaxConcurrent` field which can
+  be `0` when a caller builds `Config` directly (tests, minimal
+  embeddings). The frontend uses it to disable streams-selector options
+  above cap (labelled `(>N)`) and to clamp `activeCfg.streams`.
+
+### Fixed
+
+- Sibling streams no longer leak past a failure (commit `c8c1bc9`). When
+  one stream in `Promise.all` failed — typically a 503 from the
+  concurrency semaphore when the user picked more streams than
+  `MaxConcurrent` — the surviving fetches kept reading their response
+  bodies and feeding the gauge past the user's chosen duration, and the
+  toast's Retry button spawned a new run that competed with the leaked
+  streams from the previous one. `measureDownload` and `measureUpload`
+  now share an `AbortController` across siblings so the outer test
+  signal, the time-mode deadline, and any sibling failure all funnel
+  through one cancellation point. `postBlobUntil` gained an entry check
+  for a pre-aborted signal so the worker's `!signal.aborted` guard
+  can't race a doomed XHR into flight. `runTest`'s `finally` now calls
+  `abortCtrl.abort()` as a belt-and-suspenders catch-all.
+- `activeCfg.streams` used to desync from the visible streams dropdown
+  when the merged value snapped to a smaller discrete option (commit
+  `c8c1bc9`). Options are 1/2/4/8/16, so a cap of 10 makes
+  `mergeConfig` yield 10 but the largest usable option is 8;
+  programmatic `sel.value` assignment does not fire the `change`
+  handler, so `measure*` would spawn 10 streams while the user saw 8
+  and history would persist `streams: 10`. `applyConfigToUI` now reads
+  the snapped value back into `activeCfg`.
+
 ## [0.2.0] - 2026-05-23
 
 ### Added
