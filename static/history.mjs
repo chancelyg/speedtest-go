@@ -30,6 +30,7 @@ const STRINGS = {
     empty:       '还没有测速记录',
     error:       '加载历史记录失败',
     colTime:     '时间',
+    colIp:       '来源 IP',
     colDownload: '下载',
     colUpload:   '上传',
     colLatency:  '延迟',
@@ -47,6 +48,7 @@ const STRINGS = {
     empty:       'No records yet',
     error:       'Failed to load history',
     colTime:     'Time',
+    colIp:       'Source IP',
     colDownload: '↓ Mbps',
     colUpload:   '↑ Mbps',
     colLatency:  'Latency',
@@ -227,7 +229,7 @@ export function mountHistory(containerEl, opts = {}) {
 
     const thead = document.createElement('thead');
     const trh = document.createElement('tr');
-    for (const key of ['colTime', 'colDownload', 'colUpload', 'colLatency', 'colGrade']) {
+    for (const key of ['colTime', 'colIp', 'colDownload', 'colUpload', 'colLatency', 'colGrade']) {
       const th = document.createElement('th');
       th.textContent = t(key);
       trh.appendChild(th);
@@ -241,6 +243,8 @@ export function mountHistory(containerEl, opts = {}) {
       tr.className = 'history-row';
 
       appendCell(tr, formatTimestamp(r.created_at));
+      const ip = formatIp(r.client_ip);
+      appendCell(tr, ip, 'history-cell-ip', ip === '--' ? '' : ip);
       appendCell(tr, formatMbps(r.download_mbps), 'history-cell-num');
       appendCell(tr, formatMbps(r.upload_mbps), 'history-cell-num');
       const lat = Number(r.latency_loaded_ms) > 0
@@ -369,10 +373,11 @@ function clearChildren(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
-function appendCell(tr, text, cls) {
+function appendCell(tr, text, cls, titleText) {
   const td = document.createElement('td');
   if (cls) td.className = cls;
   td.textContent = text;
+  if (titleText) td.title = titleText;
   tr.appendChild(td);
 }
 
@@ -406,6 +411,12 @@ function formatLatency(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) return '--';
   return `${n.toFixed(1)} ms`;
+}
+
+function formatIp(v) {
+  if (typeof v !== 'string') return '--';
+  const s = v.trim();
+  return s === '' ? '--' : s;
 }
 
 function sanitizeGrade(g) {

@@ -897,6 +897,15 @@ body {
   letter-spacing: 0.02em;
 }
 
+.history-cell-ip {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 12px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Export actions in the history card header (CSV / JSON download buttons). */
 .history-export {
   display: inline-flex;
@@ -982,6 +991,9 @@ body {
     max-width: 96px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .history-cell-ip {
+    max-width: 110px;
   }
   .history-export-btn,
   .history-page-btn {
