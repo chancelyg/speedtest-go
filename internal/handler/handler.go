@@ -146,8 +146,14 @@ type configResponse struct {
 	//                   at the start of download/upload (slow-start trim).
 	//   historyEnabled: true iff the server has a working SQLite store;
 	//                   F3 hides history/trends UI when false.
+	//   maxConcurrent:  server-wide semaphore capacity; the frontend caps its
+	//                   streams selector at this value so a slow-link test
+	//                   never fires more requests than the server will admit
+	//                   (surplus streams would 503 immediately and leave
+	//                   orphaned in-flight sibling streams driving the gauge).
 	WarmupMs       int  `json:"warmupMs"`
 	HistoryEnabled bool `json:"historyEnabled"`
+	MaxConcurrent  int  `json:"maxConcurrent"`
 }
 
 // ConfigHandler exposes the server-side test configuration so the frontend
@@ -165,6 +171,11 @@ func (h *Handler) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 		Streams:        h.cfg.Streams,
 		WarmupMs:       h.cfg.WarmupMs,
 		HistoryEnabled: h.historyEnabled(),
+		// cap(h.sem) is authoritative: Handler.New coerces cfg.MaxConcurrent<=0
+		// to a sensible default of 10 when sizing the semaphore, so mirroring
+		// the raw cfg field here would report 0 for callers that used the
+		// zero-value config in tests.
+		MaxConcurrent:  cap(h.sem),
 	})
 }
 

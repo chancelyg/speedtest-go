@@ -96,8 +96,9 @@ let lang = (() => {
 })();
 let testing = false;
 
-// Server config (loaded once from /api/config)
-let srvCfg = { mode: 'time', durationSecs: 15, downloadMB: 25, uploadMB: 10, streams: 4 };
+// Server config (loaded once from /api/config). maxConcurrent mirrors the
+// server-side semaphore capacity and is what the streams selector clamps to.
+let srvCfg = { mode: 'time', durationSecs: 15, downloadMB: 25, uploadMB: 10, streams: 4, maxConcurrent: 10 };
 
 // Active config: localStorage > server config > defaults
 let activeCfg = { ...srvCfg };
@@ -132,12 +133,16 @@ function mergeConfig(serverCfg, localCfg) {
   const mode = (localCfg?.mode === 'size' || localCfg?.mode === 'time')
     ? localCfg.mode
     : (serverCfg.mode === 'size' || serverCfg.mode === 'time' ? serverCfg.mode : defaults.mode);
+  // Streams are capped at both the frontend's own maximum (32) and the
+  // server's semaphore capacity: firing streams > maxConcurrent immediately
+  // 503s the surplus and leaves the surviving fetches orphaned on the gauge.
+  const streamsCap = Math.min(32, Number(serverCfg?.maxConcurrent) || 32);
   return {
     mode,
-    durationSecs: clampNum(localCfg?.durationSecs ?? serverCfg.durationSecs, 1, 300,   defaults.durationSecs),
-    downloadMB:   clampNum(localCfg?.downloadMB   ?? serverCfg.downloadMB,   1, 10240, defaults.downloadMB),
-    uploadMB:     clampNum(localCfg?.uploadMB     ?? serverCfg.uploadMB,     1, 10240, defaults.uploadMB),
-    streams:      clampNum(localCfg?.streams      ?? serverCfg.streams,      1, 32,    defaults.streams),
+    durationSecs: clampNum(localCfg?.durationSecs ?? serverCfg.durationSecs, 1, 300,        defaults.durationSecs),
+    downloadMB:   clampNum(localCfg?.downloadMB   ?? serverCfg.downloadMB,   1, 10240,      defaults.downloadMB),
+    uploadMB:     clampNum(localCfg?.uploadMB     ?? serverCfg.uploadMB,     1, 10240,      defaults.uploadMB),
+    streams:      clampNum(localCfg?.streams      ?? serverCfg.streams,      1, streamsCap, defaults.streams),
   };
 }
 
@@ -195,7 +200,57 @@ function applyConfigToUI(cfg) {
   $('duration-select').value      = String(cfg.durationSecs);
   $('download-size-select').value = String(cfg.downloadMB);
   $('upload-size-select').value   = String(cfg.uploadMB);
-  $('streams-select').value       = String(cfg.streams);
+  // Streams options are discrete (1/2/4/8/16), so setStreamsSelection may
+  // snap to a smaller option (e.g. cfg.streams=10 → sel.value='8' when
+  // maxConcurrent=10). Programmatic value assignment does NOT fire the
+  // change handler, so activeCfg.streams would otherwise stay at 10 while
+  // the user sees 8 — and measure* would then spawn 10 streams. Read the
+  // snapped value back so activeCfg matches what's visible.
+  setStreamsSelection(cfg.streams);
+  const snapped = Number($('streams-select').value);
+  if (Number.isFinite(snapped) && snapped !== cfg.streams) {
+    activeCfg.streams = snapped;
+    saveLocalConfig(activeCfg);
+  }
+}
+
+// Reflect the server's concurrency cap in the streams selector: disable any
+// option whose value exceeds cap so the user cannot pick a setting that
+// would 503 the surplus requests, and mark the disabled options with a
+// suffix like "(>10)" so the reason is visible without a tooltip.
+function applyStreamsCap(cap) {
+  const sel = $('streams-select');
+  if (!sel) return;
+  const limit = Number.isFinite(cap) && cap > 0 ? cap : Infinity;
+  Array.from(sel.options).forEach(opt => {
+    const v = Number(opt.value);
+    // Strip any previously appended annotation so re-applying (language
+    // switch, re-fetch) doesn't stack "(>N)" markers.
+    const baseText = opt.textContent.replace(/\s*\(>\d+\)\s*$/, '');
+    opt.disabled    = v > limit;
+    opt.textContent = v > limit ? `${baseText} (>${limit})` : baseText;
+  });
+  // If the currently-selected option just got disabled, snap the selection
+  // and activeCfg down to the largest allowed value.
+  if (Number(sel.value) > limit) {
+    setStreamsSelection(limit);
+    activeCfg.streams = Number(sel.value) || activeCfg.streams;
+    saveLocalConfig(activeCfg);
+  }
+}
+
+// Set the streams-select to the option whose value is closest to (but not
+// exceeding) desired. Falls back to the smallest option when no option is
+// small enough — a defensive case that should never happen since option 1
+// is always present.
+function setStreamsSelection(desired) {
+  const sel = $('streams-select');
+  if (!sel) return;
+  const values = Array.from(sel.options).map(o => Number(o.value)).filter(Number.isFinite);
+  if (values.length === 0) return;
+  const usable = values.filter(v => v <= desired);
+  const snap   = usable.length > 0 ? Math.max(...usable) : Math.min(...values);
+  sel.value = String(snap);
 }
 
 const t = key => i18n[lang][key] ?? key;
@@ -560,22 +615,26 @@ async function measureDownload(signal) {
   const totalBytes   = activeCfg.downloadMB * 1024 * 1024;
   let totalReceived  = 0;
 
-  // Client-side hard deadline for time mode. Mirrors the server's
-  // SetWriteDeadline so a slow link can't keep the body open past the
-  // configured duration. The 2 s grace matches the server side.
-  let deadlineCtrl  = null;
+  // Shared abort controller across all sibling streams. Firing it cancels
+  // every in-flight fetch, and it's fired by:
+  //   1. the outer test signal (Stop button),
+  //   2. the time-mode deadline (mirrors the server's SetWriteDeadline so a
+  //      slow link can't keep the body open past the configured duration;
+  //      the 2 s grace matches the server side),
+  //   3. any sibling that errored (so a 503 from one stream doesn't leave
+  //      the surviving streams driving the gauge past the failure).
+  const streamCtrl = new AbortController();
+  if (signal) {
+    if (signal.aborted) streamCtrl.abort();
+    else signal.addEventListener('abort', () => streamCtrl.abort(), { once: true });
+  }
   let deadlineTimer = 0;
   if (activeCfg.mode === 'time') {
-    deadlineCtrl = new AbortController();
     deadlineTimer = setTimeout(
-      () => deadlineCtrl.abort(),
+      () => streamCtrl.abort(),
       activeCfg.durationSecs * 1000 + 2000,
     );
-    if (signal) {
-      signal.addEventListener('abort', () => deadlineCtrl.abort(), { once: true });
-    }
   }
-  const streamSignal = deadlineCtrl ? deadlineCtrl.signal : signal;
 
   const streamTask = async streamIndex => {
     let url = '/api/download?_=' + Date.now() + Math.random();
@@ -586,7 +645,7 @@ async function measureDownload(signal) {
       url += '&duration=' + activeCfg.durationSecs;
     }
 
-    const res = await fetch(url, { cache: 'no-store', signal: streamSignal });
+    const res = await fetch(url, { cache: 'no-store', signal: streamCtrl.signal });
     if (!res.ok || !res.body) {
       const err = new Error('download failed');
       err.httpStatus = res.status;
@@ -612,16 +671,21 @@ async function measureDownload(signal) {
         // === [F1 end] ===
       }
     } catch (e) {
-      // Deadline-triggered abort is the expected exit on slow links —
-      // bytes counted so far are still a valid throughput sample. Only
-      // the user-initiated abort should propagate as an error.
-      if (e?.name === 'AbortError' && deadlineCtrl && !signal?.aborted) return;
+      // Any AbortError that isn't user-initiated is an expected exit — the
+      // deadline fired or a sibling failure aborted this stream. Only the
+      // user's Stop button should propagate as an error.
+      if (e?.name === 'AbortError' && !signal?.aborted) return;
       throw e;
     }
   };
 
   try {
     await Promise.all(Array.from({ length: streams }, (_, i) => streamTask(i)));
+  } catch (e) {
+    // Cancel any sibling streams still in flight so the gauge stops updating
+    // and the runTest finally block can wind everything down promptly.
+    if (!streamCtrl.signal.aborted) streamCtrl.abort();
+    throw e;
   } finally {
     if (deadlineTimer) clearTimeout(deadlineTimer);
   }
@@ -687,6 +751,14 @@ const uploadChunk = (() => {
 // blob to finish before noticing the deadline.
 function postBlobUntil(blob, onProgress, signal, deadlineMs) {
   return new Promise((resolve, reject) => {
+    // The worker's `!signal.aborted` while-check races with abort; by the
+    // time we get here the signal may have already fired. Reject up-front
+    // instead of dispatching a doomed XHR that would need to race its own
+    // abort listener to unwind.
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
     const xhr = new XMLHttpRequest();
     let endedByDeadline = false;
     let externalAbort   = false;
@@ -763,6 +835,15 @@ async function measureUpload(signal) {
   let serverReceivedTotal  = 0;
   let serverElapsedMaxMs   = 0;
 
+  // Sibling-cancellation controller (same pattern as measureDownload).
+  // Outer Stop and any worker's error both funnel through this so a 503 in
+  // one worker aborts the other in-flight uploads immediately.
+  const streamCtrl = new AbortController();
+  if (signal) {
+    if (signal.aborted) streamCtrl.abort();
+    else signal.addEventListener('abort', () => streamCtrl.abort(), { once: true });
+  }
+
   const onChunk = (delta, now) => {
     if (now < measureStart) return;
     totalSent += delta;
@@ -789,7 +870,7 @@ async function measureUpload(signal) {
 
   const workerSize = async () => {
     let remaining = Math.ceil(activeCfg.uploadMB * 1024 * 1024 / streams);
-    while (remaining > 0 && !signal.aborted) {
+    while (remaining > 0 && !streamCtrl.signal.aborted) {
       const slice = remaining >= CHUNK_BYTES
         ? uploadChunk
         : uploadChunk.subarray(0, remaining);
@@ -799,27 +880,34 @@ async function measureUpload(signal) {
         if (!e.lengthComputable) return;
         onChunk(e.loaded - lastLoaded, performance.now());
         lastLoaded = e.loaded;
-      }, signal, Infinity);
+      }, streamCtrl.signal, Infinity);
       recordServerTiming(result);
     }
   };
 
   const workerTime = async () => {
     const deadline = t0 + activeCfg.durationSecs * 1000;
-    while (performance.now() < deadline && !signal.aborted) {
+    while (performance.now() < deadline && !streamCtrl.signal.aborted) {
       let lastLoaded = 0;
       const result = await postBlobUntil(new Blob([uploadChunk]), e => {
         if (!e.lengthComputable) return;
         onChunk(e.loaded - lastLoaded, performance.now());
         lastLoaded = e.loaded;
-      }, signal, deadline);
+      }, streamCtrl.signal, deadline);
       recordServerTiming(result);
       if (result.aborted) break;     // deadline reached mid-upload
     }
   };
 
   const worker = activeCfg.mode === 'time' ? workerTime : workerSize;
-  await Promise.all(Array.from({ length: streams }, worker));
+  try {
+    await Promise.all(Array.from({ length: streams }, worker));
+  } catch (e) {
+    // Sibling failure → cancel the other workers so they stop feeding the
+    // gauge before runTest's catch fires.
+    if (!streamCtrl.signal.aborted) streamCtrl.abort();
+    throw e;
+  }
 
   // === [F1: slow-start trim — final throughput] ===
   const clientMbps = trimThroughput(ulThroughputSamples, totalSent, performance.now() - measureStart);
@@ -1017,6 +1105,12 @@ async function runTest() {
     await pingPromise;
     signal.removeEventListener('abort', stopPing);
 
+    // Belt-and-suspenders: force any straggler stream that somehow escaped
+    // its measure*'s sibling-abort to die now. Idempotent on the happy path
+    // (all fetches have already returned) and on the user-Stop path (signal
+    // was aborted before we got here).
+    abortCtrl.abort();
+
     testing = false;
     btn.disabled = false;
     showStopBtn(false);
@@ -1058,6 +1152,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Init UI and apply merged config
   initConfigUI();
   applyConfigToUI(activeCfg);
+  applyStreamsCap(srvCfg?.maxConcurrent);
 
   // Load client IP
   try {

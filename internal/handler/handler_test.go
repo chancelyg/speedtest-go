@@ -110,6 +110,39 @@ func TestConfigHandlerTimeMode(t *testing.T) {
 	}
 }
 
+func TestConfigHandlerReportsMaxConcurrent(t *testing.T) {
+	// Explicit non-default value so we don't accidentally test the fallback.
+	cfg := concurrentCfg(7)
+	h := handler.New(cfg, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	h.ConfigHandler(w, req)
+
+	var body map[string]interface{}
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if got, ok := body["maxConcurrent"].(float64); !ok || int(got) != 7 {
+		t.Errorf("maxConcurrent = %v, want 7", body["maxConcurrent"])
+	}
+}
+
+func TestConfigHandlerMaxConcurrentFallback(t *testing.T) {
+	// sizeCfg leaves MaxConcurrent at 0; Handler.New coerces the semaphore
+	// capacity to 10. /api/config must report the effective value, not 0,
+	// otherwise the frontend cannot cap its streams selector correctly.
+	h := handler.New(sizeCfg(25, 10), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	h.ConfigHandler(w, req)
+
+	var body map[string]interface{}
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if got, ok := body["maxConcurrent"].(float64); !ok || int(got) != 10 {
+		t.Errorf("maxConcurrent = %v, want 10 (fallback)", body["maxConcurrent"])
+	}
+}
+
 // ── /api/ip ────────────────────────────────────────────────────────────────
 
 func TestIPHandlerReturnsJSON(t *testing.T) {
