@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-14
+
+### Added
+
+- Runtime version introspection (commit `a623cb6`). The ldflag-injected
+  build metadata (`main.version` / `commit` / `date`, populated by
+  goreleaser via `-X main.version={{ .Version }}` etc.) was baked into
+  the binary but had no runtime path — the only way to see what was
+  running was to SSH in and run `--version`. A new `handler.BuildInfo`
+  type is written by `main.go` after `handler.New()`; `/api/config` and
+  `/healthz` both surface `version` / `commit` / `date` as JSON fields.
+  The frontend renders the version on its own footer line (`v0.4.0` for
+  semver builds, `dev` for local `go run`) with commit + date shown as
+  a hover tooltip so operators can identify the exact build.
+
+### Fixed
+
+- Service-worker `CACHE_NAME` is now derived from the build version at
+  serve time (commit `a623cb6`). `static/sw.js` contains a
+  `__SPEEDTEST_CACHE_NAME__` placeholder that a new `swjsHandler` in
+  `main.go` substitutes with `speedtest-<version>` once at boot. The
+  previous hardcoded `speedtest-v1` was supposed to be manually bumped
+  on each release but that discipline was silently skipped from v0.1.0
+  through v0.3.0, meaning returning PWA users kept getting the stale
+  shell from cache forever and would never see UI updates without
+  manually clearing their cache. Every release now invalidates the
+  prior shell without anyone having to remember to bump a constant.
+- Footer version badge would never have rendered as originally shipped
+  (commit `a623cb6`, caught in blind review before commit). The
+  `<span id="footer-version">` was nested inside `#footer-text`, whose
+  `textContent` is rewritten by `applyLang()` on init and on every
+  language toggle — the textContent write collapses all child nodes
+  into a single text node, deleting the span. The badge now lives on
+  its own `<p>` under `<footer>` so language writes can't reach it.
+- Dev-build tooltip stopped rendering the literal strings `none` /
+  `unknown` (commit `a623cb6`). Those are `main.go`'s ldflag defaults
+  which are truthy in JavaScript, so the frontend's `if (build.commit)`
+  filter admitted them. New server-side helpers `commitOrEmpty()` /
+  `dateOrEmpty()` coerce the sentinels to empty strings before
+  serialising, so unversioned builds show a clean `dev` badge with no
+  tooltip rather than a puzzling `none · unknown`.
+
 ## [0.3.0] - 2026-07-14
 
 ### Added
