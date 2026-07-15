@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"speedtest-go/internal/config"
+	"speedtest-go/internal/geoip"
 	"speedtest-go/internal/store"
 )
 
@@ -76,6 +78,19 @@ type Handler struct {
 	// New() without a signature bump touching every test caller. Tests that
 	// don't care leave the zero value, which JSON-renders as "dev".
 	Build BuildInfo
+
+	// geoip is the optional IP-geolocation resolver. All access is guarded
+	// by geoipMu — critically including Close(), because maxminddb-golang
+	// uses mmap and a Close() that unmaps the buffer concurrently with a
+	// Locate() reading from that buffer would crash the process with
+	// SIGBUS. Callers go through LocateIP / SetGeoIP / CloseGeoIP; the
+	// raw handle is never handed out. geoipClosed guards against the
+	// updater's OnSwap racing our shutdown-close: once CloseGeoIP has
+	// flagged the handler as closed, a late SetGeoIP closes the passed-in
+	// Lookup itself rather than storing (and later leaking) it.
+	geoipMu     sync.RWMutex
+	geoip       geoip.Lookup
+	geoipClosed bool
 
 	// startedAt is captured at New() time so /healthz can report uptime.
 	startedAt time.Time
@@ -152,6 +167,73 @@ func (h *Handler) release() { <-h.sem }
 // Exposed to /api/config so the frontend can hide history UI when off.
 func (h *Handler) historyEnabled() bool { return h.store != nil }
 
+// geoipEnabled reports whether the IP-geolocation lookup is active.
+// Exposed to /api/config so the frontend hides the location column when
+// off, avoiding a permanent "--" column that would just add visual noise.
+func (h *Handler) geoipEnabled() bool {
+	h.geoipMu.RLock()
+	defer h.geoipMu.RUnlock()
+	return h.geoip != nil
+}
+
+// LocateIP resolves ip through the current geoip.Lookup and returns the
+// "City, Country" string (or "" when the feature is off, the IP is
+// private/loopback, or the mmdb has no entry). The RLock is held for
+// the duration of the underlying Locate call so a concurrent SetGeoIP
+// waiting on the write lock cannot Close() the mmap'd buffer while the
+// decoder is still reading from it — that would trigger a SIGBUS since
+// maxminddb-golang uses mmap and Close performs munmap.
+func (h *Handler) LocateIP(ip net.IP) string {
+	h.geoipMu.RLock()
+	defer h.geoipMu.RUnlock()
+	if h.geoip == nil {
+		return ""
+	}
+	return h.geoip.Locate(ip)
+}
+
+// SetGeoIP replaces the geoip.Lookup atomically and closes the previous
+// handle (if any) INSIDE the write lock. Holding the lock across Close
+// blocks concurrent readers for the duration of munmap — a couple of
+// microseconds on modern kernels — but is the only way to guarantee
+// that no in-flight Locate call is still reading the mmap'd pages.
+//
+// If CloseGeoIP has already run (the handler is shutting down), the
+// passed-in Lookup is closed here so a late-arriving Updater OnSwap
+// doesn't leak the freshly-downloaded reader.
+func (h *Handler) SetGeoIP(l geoip.Lookup) {
+	h.geoipMu.Lock()
+	defer h.geoipMu.Unlock()
+	if h.geoipClosed {
+		if l != nil {
+			_ = l.Close()
+		}
+		return
+	}
+	old := h.geoip
+	h.geoip = l
+	if old != nil && old != l {
+		_ = old.Close()
+	}
+}
+
+// CloseGeoIP closes the current Lookup (if any) and flags the handler
+// as shutting down so any subsequent SetGeoIP from the updater goroutine
+// closes its input rather than storing it. Called from main.go's signal
+// handler AFTER srv.Shutdown has drained in-flight requests, so no
+// concurrent LocateIP is possible.
+func (h *Handler) CloseGeoIP() error {
+	h.geoipMu.Lock()
+	defer h.geoipMu.Unlock()
+	h.geoipClosed = true
+	if h.geoip == nil {
+		return nil
+	}
+	err := h.geoip.Close()
+	h.geoip = nil
+	return err
+}
+
 // versionOrDev returns h.Build.Version, or "dev" when unset (zero-value
 // BuildInfo, or `go run` which never populates the ldflag). Keeping the
 // sentinel in one place means /api/config and /healthz agree on what the
@@ -203,6 +285,7 @@ type configResponse struct {
 	//                   orphaned in-flight sibling streams driving the gauge).
 	WarmupMs       int  `json:"warmupMs"`
 	HistoryEnabled bool `json:"historyEnabled"`
+	GeoIPEnabled   bool `json:"geoipEnabled"`
 	MaxConcurrent  int  `json:"maxConcurrent"`
 	// Build metadata (ldflag-injected via main). Version is "dev" for local
 	// `go run` builds. Commit / Date may be empty when the build wasn't
@@ -229,6 +312,7 @@ func (h *Handler) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 		Streams:        h.cfg.Streams,
 		WarmupMs:       h.cfg.WarmupMs,
 		HistoryEnabled: h.historyEnabled(),
+		GeoIPEnabled:   h.geoipEnabled(),
 		// cap(h.sem) is authoritative: Handler.New coerces cfg.MaxConcurrent<=0
 		// to a sensible default of 10 when sizing the semaphore, so mirroring
 		// the raw cfg field here would report 0 for callers that used the

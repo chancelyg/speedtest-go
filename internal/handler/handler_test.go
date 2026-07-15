@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -107,6 +109,116 @@ func TestConfigHandlerTimeMode(t *testing.T) {
 	}
 	if body["durationSecs"].(float64) != 15 {
 		t.Errorf("durationSecs = %v, want 15", body["durationSecs"])
+	}
+}
+
+// stubGeoIP is a minimal geoip.Lookup used to exercise the enrichment and
+// config-flag surfaces without needing a real mmdb fixture. Locate returns
+// a deterministic string keyed on the IP so tests can assert on it.
+// closed is set on Close so tests can assert on lifecycle.
+type stubGeoIP struct {
+	label  string
+	closed bool
+}
+
+func (s *stubGeoIP) Locate(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	return s.label
+}
+func (s *stubGeoIP) Close() error { s.closed = true; return nil }
+
+// TestGeoIPLocateSetRaceSafety pins the mutex discipline that guards
+// the SIGBUS class of bug: readers running Locate must not see the
+// underlying handle Closed mid-decode. The stubGeoIP's Close is a
+// trivial flag set (not munmap) so this test can't reproduce SIGBUS
+// itself, but `go test -race` verifies no goroutine reads Handler.geoip
+// without the lock — which is the load-bearing invariant.
+func TestGeoIPLocateSetRaceSafety(t *testing.T) {
+	h := handler.New(sizeCfg(25, 10), nil)
+	h.SetGeoIP(&stubGeoIP{label: "initial"})
+
+	var (
+		stop = make(chan struct{})
+		wg   sync.WaitGroup
+	)
+	// 5 concurrent readers hammering LocateIP.
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = h.LocateIP(net.ParseIP("8.8.8.8"))
+				}
+			}
+		}()
+	}
+	// One writer hot-swapping — mimics the updater's OnSwap firing many
+	// times in quick succession.
+	for i := 0; i < 200; i++ {
+		h.SetGeoIP(&stubGeoIP{label: "swap"})
+	}
+	close(stop)
+	wg.Wait()
+	// Final teardown must also be race-clean.
+	if err := h.CloseGeoIP(); err != nil {
+		t.Errorf("CloseGeoIP: %v", err)
+	}
+}
+
+// TestCloseGeoIPClosesLateSetInputs verifies the shutdown-vs-updater
+// invariant: once CloseGeoIP has run, a late-arriving SetGeoIP from a
+// still-in-flight updater tick must Close its input rather than store
+// (and later leak) it.
+func TestCloseGeoIPClosesLateSetInputs(t *testing.T) {
+	h := handler.New(sizeCfg(25, 10), nil)
+	initial := &stubGeoIP{label: "initial"}
+	h.SetGeoIP(initial)
+	if err := h.CloseGeoIP(); err != nil {
+		t.Fatalf("CloseGeoIP: %v", err)
+	}
+	if !initial.closed {
+		t.Error("CloseGeoIP did not close the current handle")
+	}
+	// Late-arriving OnSwap from a tick that finished after shutdown.
+	late := &stubGeoIP{label: "late"}
+	h.SetGeoIP(late)
+	if !late.closed {
+		t.Error("SetGeoIP after CloseGeoIP did not close the incoming lookup")
+	}
+	// A subsequent LocateIP must still be safe and return "".
+	if got := h.LocateIP(net.ParseIP("8.8.8.8")); got != "" {
+		t.Errorf("LocateIP after CloseGeoIP = %q, want empty", got)
+	}
+}
+
+func TestConfigHandlerReportsGeoIPEnabled(t *testing.T) {
+	// Disabled by default (nil Handler.GeoIP).
+	h := handler.New(sizeCfg(25, 10), nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	h.ConfigHandler(w, req)
+	var body map[string]any
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if body["geoipEnabled"] != false {
+		t.Errorf("geoipEnabled = %v, want false (nil GeoIP)", body["geoipEnabled"])
+	}
+
+	// Enabled when Handler.GeoIP is set.
+	h2 := handler.New(sizeCfg(25, 10), nil)
+	h2.SetGeoIP(&stubGeoIP{label: "X"})
+	req2 := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w2 := httptest.NewRecorder()
+	h2.ConfigHandler(w2, req2)
+	var body2 map[string]any
+	json.NewDecoder(w2.Result().Body).Decode(&body2)
+	if body2["geoipEnabled"] != true {
+		t.Errorf("geoipEnabled = %v, want true (GeoIP set)", body2["geoipEnabled"])
 	}
 }
 

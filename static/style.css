@@ -926,6 +926,18 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Same visual weight as .history-cell-ip so the two identifier columns
+   read as a matched pair. Location strings tend to be a bit longer
+   ("City, Country") than an IP, so max-width is a shade higher on
+   desktop; the narrow-screen override matches history-cell-ip. */
+.history-cell-location {
+  color: var(--text-muted);
+  font-size: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Export actions in the history card header (CSV / JSON download buttons). */
 .history-export {
   display: inline-flex;
@@ -1013,6 +1025,9 @@ body {
     text-overflow: ellipsis;
   }
   .history-cell-ip {
+    max-width: 110px;
+  }
+  .history-cell-location {
     max-width: 110px;
   }
   .history-export-btn,

@@ -30,6 +30,14 @@ type Result struct {
 	PacketLoss        float64 `json:"packet_loss"`
 	BufferbloatGrade  string  `json:"bufferbloat_grade"`
 	ClientIP          string  `json:"client_ip"`
+	// ClientIPLocation is the human-readable "City, Country" (or just
+	// "Country") string derived from ClientIP at write time by the geoip
+	// package when the operator enabled it via --geoip-db / SPEEDTEST_GEOIP_DB.
+	// Empty when the feature was off at write time, when the IP was private
+	// or loopback, or when the mmdb file had no entry — the frontend treats
+	// all three the same way (renders "--"). Once persisted, the value is
+	// frozen against the state at write time; the reader is never re-run.
+	ClientIPLocation  string  `json:"client_ip_location"`
 	UserAgent         string  `json:"user_agent"`
 	SettingsJSON      string  `json:"settings_json"`
 }

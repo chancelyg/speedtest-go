@@ -100,7 +100,7 @@ let testing = false;
 // server-side semaphore capacity and is what the streams selector clamps to;
 // version/commit/date carry the ldflag-injected build metadata surfaced in
 // the footer version badge. "dev" is the sentinel for unversioned builds.
-let srvCfg = { mode: 'time', durationSecs: 15, downloadMB: 25, uploadMB: 10, streams: 4, maxConcurrent: 10, version: 'dev', commit: '', date: '' };
+let srvCfg = { mode: 'time', durationSecs: 15, downloadMB: 25, uploadMB: 10, streams: 4, maxConcurrent: 10, version: 'dev', commit: '', date: '', geoipEnabled: false };
 
 // Active config: localStorage > server config > defaults
 let activeCfg = { ...srvCfg };
@@ -1203,7 +1203,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       historyEl.hidden = false;
       // Stash on window so runTest's [F3: persist result] block can call
       // refresh() without re-importing or threading through closures.
-      window.__historyPanel = mountHistory(historyEl, { apiBase: '/api/results', pageSize: 20, lang });
+      window.__historyPanel = mountHistory(historyEl, {
+        apiBase: '/api/results',
+        pageSize: 20,
+        lang,
+        // Opt-in per operator: /api/config reports geoipEnabled=true only
+        // when SPEEDTEST_GEOIP_DB pointed at a readable .mmdb. Feature-off
+        // deploys keep the pre-geoip table layout unchanged.
+        geoipEnabled: srvCfg?.geoipEnabled === true,
+      });
     }
   }
   // === [F3 end] ===

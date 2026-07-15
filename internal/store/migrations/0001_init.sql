@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS results (
   packet_loss REAL NOT NULL DEFAULT 0,
   bufferbloat_grade TEXT NOT NULL DEFAULT '',
   client_ip TEXT NOT NULL DEFAULT '',
+  client_ip_location TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
   settings_json TEXT NOT NULL DEFAULT ''
 );

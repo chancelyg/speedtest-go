@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -142,6 +143,14 @@ func (h *Handler) createResult(w http.ResponseWriter, r *http.Request) {
 	in.CreatedAt = time.Now().UnixMilli()
 	in.ClientIP = ClientIP(r)
 	in.UserAgent = truncate(r.Header.Get("User-Agent"), 512)
+	// Enrich with geoip when the operator opted in. The resolver returns ""
+	// for private/loopback IPs and mmdb misses, so we don't need to guard
+	// the ip parse or the ClientIPLocation write beyond the nil-handle check.
+	// Stored at write time so historical rows keep their snapshot even if
+	// the mmdb is later swapped or removed.
+	// LocateIP holds the RLock across the lookup so a concurrent
+	// SetGeoIP(new) can't Close (munmap) the reader mid-decode.
+	in.ClientIPLocation = h.LocateIP(net.ParseIP(in.ClientIP))
 
 	saved, err := h.store.Save(r.Context(), in)
 	if err != nil {
@@ -214,7 +223,7 @@ func writeResultsCSV(w http.ResponseWriter, results []store.Result) {
 		"latency_idle_ms", "latency_loaded_ms",
 		"download_jitter_ms", "upload_jitter_ms",
 		"packet_loss", "bufferbloat_grade",
-		"client_ip", "user_agent", "settings_json",
+		"client_ip", "client_ip_location", "user_agent", "settings_json",
 	})
 	for _, r := range results {
 		_ = cw.Write([]string{
@@ -229,6 +238,7 @@ func writeResultsCSV(w http.ResponseWriter, results []store.Result) {
 			strconv.FormatFloat(r.PacketLoss, 'f', -1, 64),
 			csvSafe(r.BufferbloatGrade),
 			csvSafe(r.ClientIP),
+			csvSafe(r.ClientIPLocation),
 			csvSafe(r.UserAgent),
 			csvSafe(r.SettingsJSON),
 		})
@@ -277,12 +287,17 @@ func sanitiseResult(r *store.Result) {
 	// 1 kB as a safety net against row bloat.
 	r.SettingsJSON = truncate(r.SettingsJSON, 1024)
 
-	// Clients should never set ID/CreatedAt/ClientIP/UserAgent — the server
-	// overwrites those after this function returns. Zero them out to avoid
-	// any accidental persistence of a forged value.
+	// Clients should never set ID/CreatedAt/ClientIP/ClientIPLocation/UserAgent
+	// — the server overwrites those after this function returns. Zero them
+	// out to avoid any accidental persistence of a forged value. Zeroing
+	// ClientIPLocation specifically prevents a client from fabricating a
+	// location string when the server has geoip disabled (in which case the
+	// enrichment step in createResult is a no-op and would otherwise leave
+	// the client-supplied value in place).
 	r.ID = 0
 	r.CreatedAt = 0
 	r.ClientIP = ""
+	r.ClientIPLocation = ""
 	r.UserAgent = ""
 }
 

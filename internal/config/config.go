@@ -41,6 +41,9 @@ const (
 //	SPEEDTEST_HISTORY_RETENTION_DAYS   Days to keep history        default: 90              (0 = keep forever)
 //	SPEEDTEST_RATE_PER_MIN             Per-IP rate limit (req/min) default: 0               (0 = unlimited)
 //	SPEEDTEST_CONFIG                   Optional JSON config file   default: "" (no file)
+//	SPEEDTEST_GEOIP_DB                 mmdb path for IP geoloc     default: "" (disable feature)
+//	SPEEDTEST_GEOIP_LICENSE_KEY        MaxMind license key         default: "" (no auto-download)
+//	SPEEDTEST_GEOIP_EDITION            MaxMind edition to download default: "GeoLite2-City"
 type Config struct {
 	Host                 string
 	Port                 string
@@ -55,6 +58,27 @@ type Config struct {
 	HistoryRetentionDays int    // Phase 3: 0 = keep forever
 	RatePerMin           int    // Phase 4 (B): per-IP requests/min limit; 0 = disabled (default)
 	ConfigFilePath       string // Phase 4 (C): JSON config file path (CLI/env override)
+	// GeoIPDBPath is the filesystem path to a MaxMind- or DB-IP-format .mmdb
+	// database used to enrich stored results with a City/Country location
+	// string. Empty (the default) disables the feature — the binary then
+	// makes no attempt to load any mmdb file, keeping the zero-config
+	// deployment story free of third-party data dependencies.
+	GeoIPDBPath string
+	// GeoIPLicenseKey is a MaxMind account license key. When set, main.go
+	// spins up a background updater that (a) downloads the .mmdb from
+	// MaxMind on first run if GeoIPDBPath is missing, (b) refreshes it
+	// weekly and hot-swaps the in-process reader. Empty disables the
+	// auto-download machinery; operators who prefer to manage the file
+	// themselves (via `geoipupdate` cron, ansible push, etc.) just leave
+	// this blank and point GeoIPDBPath at the file they already have.
+	GeoIPLicenseKey string
+	// GeoIPEdition names the MaxMind product to download when the license
+	// key is set. Defaults to "GeoLite2-City" — the only edition that
+	// carries city-level names, which is what the frontend renders. Other
+	// legal values include "GeoLite2-Country" (smaller, country-only) and
+	// "GeoLite2-ASN" (network info, not location); operators can pass them
+	// through unchanged and the URL builder forwards verbatim.
+	GeoIPEdition string
 }
 
 // CLIOpts captures CLI-only flags that are not part of the runtime Config but
@@ -87,6 +111,9 @@ func Load() *Config {
 		HistoryRetentionDays: envInt("SPEEDTEST_HISTORY_RETENTION_DAYS", 90, 0, 3650),
 		RatePerMin:           envInt("SPEEDTEST_RATE_PER_MIN", 0, 0, 100_000),
 		ConfigFilePath:       envStrAllowEmpty("SPEEDTEST_CONFIG", ""),
+		GeoIPDBPath:          envStrAllowEmpty("SPEEDTEST_GEOIP_DB", ""),
+		GeoIPLicenseKey:      envStrAllowEmpty("SPEEDTEST_GEOIP_LICENSE_KEY", ""),
+		GeoIPEdition:         envStr("SPEEDTEST_GEOIP_EDITION", "GeoLite2-City"),
 	}
 }
 
@@ -166,6 +193,9 @@ func defaults() *Config {
 		HistoryRetentionDays: 90,
 		RatePerMin:           0,
 		ConfigFilePath:       "",
+		GeoIPDBPath:          "",
+		GeoIPLicenseKey:      "",
+		GeoIPEdition:         "GeoLite2-City",
 	}
 }
 
@@ -188,18 +218,24 @@ type cliValues struct {
 	warmupMs      int
 	dbPath        string
 	ratePerMin    int
+	geoIPDBPath     string
+	geoIPLicenseKey string
+	geoIPEdition    string
 
-	setHost          bool
-	setPort          bool
-	setMode          bool
-	setDurationSec   bool
-	setStreams       bool
-	setDownloadMB    bool
-	setUploadMB      bool
-	setMaxConcurrent bool
-	setWarmupMs      bool
-	setDBPath        bool
-	setRatePerMin    bool
+	setHost            bool
+	setPort            bool
+	setMode            bool
+	setDurationSec     bool
+	setStreams         bool
+	setDownloadMB      bool
+	setUploadMB        bool
+	setMaxConcurrent   bool
+	setWarmupMs        bool
+	setDBPath          bool
+	setRatePerMin      bool
+	setGeoIPDBPath     bool
+	setGeoIPLicenseKey bool
+	setGeoIPEdition    bool
 }
 
 // parseCLI runs the flag.FlagSet over args and reports which flags were
@@ -224,6 +260,9 @@ func parseCLI(args []string) (cliValues, *CLIOpts, error) {
 	fs.IntVar(&cli.warmupMs, "warmup-ms", 0, "Throughput slow-start trim in milliseconds")
 	fs.StringVar(&cli.dbPath, "db-path", "", "SQLite history path (\"\" disables persistence)")
 	fs.IntVar(&cli.ratePerMin, "rate-per-min", 0, "Per-IP rate limit (req/min, 0 = unlimited)")
+	fs.StringVar(&cli.geoIPDBPath, "geoip-db", "", "MaxMind/DB-IP .mmdb path for IP geolocation (\"\" disables feature)")
+	fs.StringVar(&cli.geoIPLicenseKey, "geoip-license-key", "", "MaxMind license key — set to auto-download + weekly refresh the mmdb file")
+	fs.StringVar(&cli.geoIPEdition, "geoip-edition", "", "MaxMind edition to auto-download (default \"GeoLite2-City\")")
 	fs.BoolVar(&opts.ShowVersion, "version", false, "Print version information and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -259,6 +298,12 @@ func parseCLI(args []string) (cliValues, *CLIOpts, error) {
 			cli.setDBPath = true
 		case "rate-per-min":
 			cli.setRatePerMin = true
+		case "geoip-db":
+			cli.setGeoIPDBPath = true
+		case "geoip-license-key":
+			cli.setGeoIPLicenseKey = true
+		case "geoip-edition":
+			cli.setGeoIPEdition = true
 		}
 	})
 
@@ -309,6 +354,17 @@ func applyCLI(cfg *Config, cli cliValues) {
 	if cli.setRatePerMin {
 		cfg.RatePerMin = clamp(cli.ratePerMin, 0, 100_000, cfg.RatePerMin)
 	}
+	if cli.setGeoIPDBPath {
+		// "" is intentional: disables the geoip feature.
+		cfg.GeoIPDBPath = cli.geoIPDBPath
+	}
+	if cli.setGeoIPLicenseKey {
+		// "" is intentional: disables auto-download.
+		cfg.GeoIPLicenseKey = cli.geoIPLicenseKey
+	}
+	if cli.setGeoIPEdition && cli.geoIPEdition != "" {
+		cfg.GeoIPEdition = cli.geoIPEdition
+	}
 }
 
 // clamp returns n if it sits within [min, max]; otherwise it returns the
@@ -338,6 +394,9 @@ type jsonConfig struct {
 	DBPath               *string `json:"db_path,omitempty"`
 	HistoryRetentionDays *int    `json:"history_retention_days,omitempty"`
 	RatePerMin           *int    `json:"rate_per_min,omitempty"`
+	GeoIPDBPath          *string `json:"geoip_db_path,omitempty"`
+	GeoIPLicenseKey      *string `json:"geoip_license_key,omitempty"`
+	GeoIPEdition         *string `json:"geoip_edition,omitempty"`
 }
 
 // readJSONFile parses path with strict (unknown-fields-rejected) decoding.
@@ -404,6 +463,15 @@ func applyJSON(cfg *Config, fc jsonConfig) {
 	}
 	if fc.RatePerMin != nil {
 		cfg.RatePerMin = clamp(*fc.RatePerMin, 0, 100_000, cfg.RatePerMin)
+	}
+	if fc.GeoIPDBPath != nil {
+		cfg.GeoIPDBPath = *fc.GeoIPDBPath
+	}
+	if fc.GeoIPLicenseKey != nil {
+		cfg.GeoIPLicenseKey = *fc.GeoIPLicenseKey
+	}
+	if fc.GeoIPEdition != nil && *fc.GeoIPEdition != "" {
+		cfg.GeoIPEdition = *fc.GeoIPEdition
 	}
 }
 
@@ -528,6 +596,18 @@ func overlayEnv(cfg *Config, env func(string) string) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.RatePerMin = clamp(n, 0, 100_000, cfg.RatePerMin)
 		}
+	}
+	// GEOIP_DB: same "non-empty env wins, explicit '' via env not supported"
+	// contract as DB_PATH; use the JSON file or CLI flag to disable an
+	// operator-set path.
+	if v := env("SPEEDTEST_GEOIP_DB"); v != "" {
+		cfg.GeoIPDBPath = v
+	}
+	if v := env("SPEEDTEST_GEOIP_LICENSE_KEY"); v != "" {
+		cfg.GeoIPLicenseKey = v
+	}
+	if v := env("SPEEDTEST_GEOIP_EDITION"); v != "" {
+		cfg.GeoIPEdition = v
 	}
 }
 

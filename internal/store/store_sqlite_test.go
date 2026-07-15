@@ -39,6 +39,7 @@ func sampleResult(createdAt int64) store.Result {
 		PacketLoss:       0.0,
 		BufferbloatGrade: "A",
 		ClientIP:         "127.0.0.1",
+		ClientIPLocation: "Localhost, Testland",
 		UserAgent:        "test-agent/1.0",
 		SettingsJSON:     `{"mode":"time"}`,
 	}
@@ -59,6 +60,43 @@ func TestOpenInvalidPath(t *testing.T) {
 	// A path under a non-existent directory should fail at PingContext.
 	if _, err := store.Open("/this/path/does/not/exist/x.db"); err == nil {
 		t.Error("expected error for unwritable path, got nil")
+	}
+}
+
+// The migration is idempotent: opening a DB that already has the current
+// schema must not error. Two Open calls in a row on the same file exercise
+// the ensureColumn short-circuit path.
+func TestOpenIsIdempotentAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "reopen.db")
+
+	s1, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	if _, err := s1.Save(context.Background(), sampleResult(1_000)); err != nil {
+		t.Fatalf("Save on first Open: %v", err)
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+
+	// Second Open must succeed and see the row from the first.
+	s2, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("second Open: %v (migration re-run should be a no-op)", err)
+	}
+	defer s2.Close()
+	got, err := s2.List(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatalf("List after reopen: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d rows, want 1 preserved across reopen", len(got))
+	}
+	if got[0].ClientIPLocation != "Localhost, Testland" {
+		t.Errorf("ClientIPLocation = %q, want %q (round-trip)",
+			got[0].ClientIPLocation, "Localhost, Testland")
 	}
 }
 

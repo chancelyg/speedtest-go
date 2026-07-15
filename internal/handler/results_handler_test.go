@@ -129,6 +129,59 @@ func TestCreateResultStoresAndReturnsID(t *testing.T) {
 	}
 }
 
+func TestCreateResultEnrichesWithGeoIPWhenEnabled(t *testing.T) {
+	h, s := newHandlerWithStore(t)
+	// Attach a canned lookup that returns a fixed label so the assertion
+	// doesn't depend on a real mmdb. Uses the same stubGeoIP from
+	// handler_test.go (same package).
+	h.SetGeoIP(&stubGeoIP{label: "Testville, Nowhere"})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/results",
+		strings.NewReader(`{"download_mbps":1,"upload_mbps":1,"bufferbloat_grade":"A"}`))
+	// httptest.NewRequest sets RemoteAddr to 192.0.2.1:1234; that IP is
+	// documentation-range (RFC 5737) — public in isPrivateOrLoopback's
+	// classification — so the stub Locate is exercised end-to-end.
+	req.RemoteAddr = "192.0.2.1:1234"
+	w := httptest.NewRecorder()
+	h.ResultsListOrCreate(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", w.Code)
+	}
+
+	got, err := s.List(context.Background(), 1, 0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("List: got=%v err=%v", got, err)
+	}
+	if got[0].ClientIPLocation != "Testville, Nowhere" {
+		t.Errorf("ClientIPLocation = %q, want %q", got[0].ClientIPLocation, "Testville, Nowhere")
+	}
+}
+
+func TestCreateResultIgnoresClientSuppliedLocation(t *testing.T) {
+	// Verifies sanitiseResult zeroes ClientIPLocation before the
+	// server-controlled overwrite: with GeoIP off, a forged
+	// client_ip_location in the JSON body must NOT survive to persistence.
+	h, s := newHandlerWithStore(t)
+	// GeoIP intentionally left nil (feature off).
+
+	req := httptest.NewRequest(http.MethodPost, "/api/results",
+		strings.NewReader(`{"download_mbps":1,"upload_mbps":1,"bufferbloat_grade":"A","client_ip_location":"Forged, Fake"}`))
+	w := httptest.NewRecorder()
+	h.ResultsListOrCreate(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", w.Code)
+	}
+
+	got, err := s.List(context.Background(), 1, 0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("List: got=%v err=%v", got, err)
+	}
+	if got[0].ClientIPLocation != "" {
+		t.Errorf("ClientIPLocation = %q, want empty (forgery must be stripped)",
+			got[0].ClientIPLocation)
+	}
+}
+
 func TestCreateResultRejectsInvalidJSON(t *testing.T) {
 	h, _ := newHandlerWithStore(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/results", strings.NewReader("not-json"))
@@ -484,7 +537,20 @@ func TestExportCSVNeutralisesFormulaInjection(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("row count = %d, want 2", len(rows))
 	}
-	settingsCol := rows[1][12]
+	// settings_json is the final column in the CSV. Look it up by header
+	// name so the assertion survives future column additions without
+	// silently shifting to a neighbouring cell.
+	settingsIdx := -1
+	for i, h := range rows[0] {
+		if h == "settings_json" {
+			settingsIdx = i
+			break
+		}
+	}
+	if settingsIdx < 0 {
+		t.Fatalf("settings_json header column not found in %v", rows[0])
+	}
+	settingsCol := rows[1][settingsIdx]
 	if !strings.HasPrefix(settingsCol, "'") {
 		t.Errorf("formula not prefixed with apostrophe: %q", settingsCol)
 	}

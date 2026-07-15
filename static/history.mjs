@@ -12,11 +12,18 @@
 //     goToPage(n: number): Promise<void>,
 //   }
 //
-// opts: { apiBase?: string, pageSize?: number, lang?: 'zh'|'en' }
+// opts: { apiBase?: string, pageSize?: number, lang?: 'zh'|'en',
+//         geoipEnabled?: boolean }
 //
 // JSON contract: see internal/handler/results_handler.go (`Result` schema).
 // Pagination is server-driven via /api/results?limit=&offset=; the response
 // envelope `{results, total, limit, offset}` is what drives page math.
+//
+// geoipEnabled is sourced from /api/config.geoipEnabled — when true the
+// table renders an extra "归属地 / Location" column populated from each
+// row's client_ip_location string. When false (the default), the column
+// is omitted entirely so a zero-config deploy shows the exact same table
+// it did before the geoip feature landed.
 
 /* ── i18n strings ──────────────────────────────────────────────────────── */
 
@@ -31,6 +38,7 @@ const STRINGS = {
     error:       '加载历史记录失败',
     colTime:     '时间',
     colIp:       '来源 IP',
+    colLocation: '归属地',
     colDownload: '下载',
     colUpload:   '上传',
     colLatency:  '延迟',
@@ -49,6 +57,7 @@ const STRINGS = {
     error:       'Failed to load history',
     colTime:     'Time',
     colIp:       'Source IP',
+    colLocation: 'Location',
     colDownload: '↓ Mbps',
     colUpload:   '↑ Mbps',
     colLatency:  'Latency',
@@ -101,12 +110,14 @@ export function computePageWindow(totalPages, currentPage, windowSize = 2) {
 
 /**
  * @param {HTMLElement} containerEl
- * @param {{ apiBase?: string, pageSize?: number, lang?: 'zh'|'en' }} [opts]
+ * @param {{ apiBase?: string, pageSize?: number, lang?: 'zh'|'en',
+ *          geoipEnabled?: boolean }} [opts]
  */
 export function mountHistory(containerEl, opts = {}) {
-  const apiBase  = opts.apiBase || '/api/results';
-  const pageSize = clampInt(opts.pageSize, 5, 100, 20);
-  let lang       = STRINGS[opts.lang] ? opts.lang : 'zh';
+  const apiBase      = opts.apiBase || '/api/results';
+  const pageSize     = clampInt(opts.pageSize, 5, 100, 20);
+  let lang           = STRINGS[opts.lang] ? opts.lang : 'zh';
+  const geoipEnabled = opts.geoipEnabled === true;
 
   // Mutable state.
   let currentPage = 1;
@@ -229,7 +240,14 @@ export function mountHistory(containerEl, opts = {}) {
 
     const thead = document.createElement('thead');
     const trh = document.createElement('tr');
-    for (const key of ['colTime', 'colIp', 'colDownload', 'colUpload', 'colLatency', 'colGrade']) {
+    // Column order matches the row-render loop below. colLocation is
+    // spliced in immediately after colIp when the server has geoip
+    // enabled; otherwise the location cell is skipped in both places so
+    // no empty column is rendered.
+    const headerKeys = geoipEnabled
+      ? ['colTime', 'colIp', 'colLocation', 'colDownload', 'colUpload', 'colLatency', 'colGrade']
+      : ['colTime', 'colIp', 'colDownload', 'colUpload', 'colLatency', 'colGrade'];
+    for (const key of headerKeys) {
       const th = document.createElement('th');
       th.textContent = t(key);
       trh.appendChild(th);
@@ -245,6 +263,10 @@ export function mountHistory(containerEl, opts = {}) {
       appendCell(tr, formatTimestamp(r.created_at));
       const ip = formatIp(r.client_ip);
       appendCell(tr, ip, 'history-cell-ip', ip === '--' ? '' : ip);
+      if (geoipEnabled) {
+        const loc = formatLocation(r.client_ip_location);
+        appendCell(tr, loc, 'history-cell-location', loc === '--' ? '' : loc);
+      }
       appendCell(tr, formatMbps(r.download_mbps), 'history-cell-num');
       appendCell(tr, formatMbps(r.upload_mbps), 'history-cell-num');
       const lat = Number(r.latency_loaded_ms) > 0
@@ -414,6 +436,17 @@ function formatLatency(v) {
 }
 
 function formatIp(v) {
+  if (typeof v !== 'string') return '--';
+  const s = v.trim();
+  return s === '' ? '--' : s;
+}
+
+// Location string is written by the server at result-save time (see the
+// geoip package). Empty means the feature was off at write time, the IP
+// was private/loopback, or the mmdb file had no entry — the frontend
+// renders all three cases identically as "--" so the column reads
+// consistently regardless of why enrichment didn't happen.
+function formatLocation(v) {
   if (typeof v !== 'string') return '--';
   const s = v.trim();
   return s === '' ? '--' : s;

@@ -71,11 +71,55 @@ go build -o speedtest .
 | `SPEEDTEST_UPLOAD_SIZE` | `10` | 大小模式上传量（MB） |
 | `SPEEDTEST_STREAMS` | `4` | 并发流数量 |
 | `SPEEDTEST_MAX_CONCURRENT` | `10` | 最大并发测速数 |
+| `SPEEDTEST_GEOIP_DB` | `""` | 可选：本地 mmdb 路径,启用后 History 显示 IP 归属地(见下) |
+| `SPEEDTEST_GEOIP_LICENSE_KEY` | `""` | 可选：MaxMind license key,带上则自动下载并每周刷新 mmdb |
+| `SPEEDTEST_GEOIP_EDITION` | `GeoLite2-City` | 自动下载时选用的 MaxMind edition |
 
 ```bash
 # 示例：30 秒时长模式，8 条并发流
 SPEEDTEST_PORT=3000 SPEEDTEST_DURATION=30 SPEEDTEST_STREAMS=8 ./speedtest
 ```
+
+### 可选:开启 IP 归属地
+
+默认部署**不依赖任何第三方数据源**。如需在 History 里给每条记录标注"城市, 国家",
+有两种打开方式,任选:
+
+**方式 A —— 自己维护 mmdb 文件**(适合已经装了 `geoipupdate` 或用 ansible 分发的场景):
+
+```bash
+SPEEDTEST_GEOIP_DB=/etc/speedtest/GeoLite2-City.mmdb ./speedtest
+# 或 CLI:  ./speedtest --geoip-db /etc/speedtest/GeoLite2-City.mmdb
+```
+
+**方式 B —— 让 speedtest 自己下载 + 每周刷新**(适合最小化运维):
+
+```bash
+SPEEDTEST_GEOIP_LICENSE_KEY=xxxxxxxxxxxxxxxx ./speedtest
+# 或 CLI:  ./speedtest --geoip-license-key xxxxxxxxxxxxxxxx
+```
+
+带 license key 时启动瞬间 `geoipEnabled=false`,后台 goroutine 从 MaxMind 下 tar.gz、
+验证、原子替换、热插新的 reader —— 通常 5-10 秒后 `/api/config` 变为 `true`,新的
+测速记录开始带归属地。文件默认落在 `./GeoLite2-City.mmdb`(可用 `SPEEDTEST_GEOIP_DB`
+指定别处)。之后每 7 天带 `If-Modified-Since` 复查一次,MaxMind 返回 304 就跳过。
+下载失败、key 错、tar 坏——一律 warn 日志 + fail-open,主服务不受影响。
+
+也可以同时给 `--geoip-license-key` **和** `--geoip-db`——前者管更新,后者是文件落地
+位置(便于持久化到你想要的目录)。
+
+不带任何 geoip 参数时,二进制**不会向 MaxMind 或任何外部服务发一个字节**。
+
+数据源(择一):
+
+- **MaxMind GeoLite2 City** — https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+  (免费注册获取 license key,两种方式都支持)
+- **DB-IP City Lite** — https://db-ip.com/db/download/ip-to-city-lite
+  (免费月更、CC-BY 归属;方式 A 支持,方式 B 只对 MaxMind 生效)
+
+只需国家级归属(数据更小)可以 `SPEEDTEST_GEOIP_EDITION=GeoLite2-Country`。归属地
+字符串在**写入时**快照进 SQLite (`client_ip_location` 列),之后无论 mmdb 更新与否,
+历史记录都保留当时的判断结果。
 
 ---
 

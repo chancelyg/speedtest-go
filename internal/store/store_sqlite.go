@@ -16,6 +16,12 @@ import (
 //go:embed migrations/0001_init.sql
 var schemaInit string
 
+// Phase 5: opt-in geoip feature adds a client_ip_location column. Applied
+// only when the column is absent — see ensureColumn in Open().
+//
+//go:embed migrations/0002_geoip_column.sql
+var migrationGeoIPColumn string
+
 // SQLite is the SQLite-backed implementation of Store.
 //
 // It uses WAL journaling for concurrent readers while a writer is active and a
@@ -62,7 +68,53 @@ func Open(path string) (*SQLite, error) {
 		return nil, fmt.Errorf("store: apply schema: %w", err)
 	}
 
+	// Additive column migrations. Each ensureColumn call is a no-op on a
+	// freshly-created database (the CREATE TABLE above already includes the
+	// column) AND on a database that was previously upgraded (the column is
+	// already present). SQLite lacks `ADD COLUMN IF NOT EXISTS`, so we
+	// check via PRAGMA table_info before executing the ALTER.
+	//
+	// Note: the future story for a proper migrations table lives in
+	// docs/deployment.md; for two additive migrations this guard is
+	// simpler and won't corrupt schema_migrations tracking.
+	if err := ensureColumn(ctx, db, "results", "client_ip_location", migrationGeoIPColumn); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: apply 0002 geoip column: %w", err)
+	}
+
 	return &SQLite{db: db}, nil
+}
+
+// ensureColumn adds a column to a table by running migrationSQL, but only
+// when the column is not yet present. Idempotent — safe to call on every
+// Open regardless of database age. columnName must not contain a quote;
+// callers pass compile-time constants so injection is not a concern.
+func ensureColumn(ctx context.Context, db *sql.DB, table, column, migrationSQL string) error {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("pragma table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, colType    string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if name == column {
+			return nil // already present — nothing to do
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table_info(%s): %w", table, err)
+	}
+	if _, err := db.ExecContext(ctx, migrationSQL); err != nil {
+		return fmt.Errorf("exec migration for %s.%s: %w", table, column, err)
+	}
+	return nil
 }
 
 // Close closes the underlying *sql.DB. Safe to call multiple times.
@@ -84,15 +136,15 @@ INSERT INTO results (
   latency_idle_ms, latency_loaded_ms,
   download_jitter_ms, upload_jitter_ms,
   packet_loss, bufferbloat_grade,
-  client_ip, user_agent, settings_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  client_ip, client_ip_location, user_agent, settings_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 	res, err := s.db.ExecContext(ctx, q,
 		r.CreatedAt, r.DownloadMbps, r.UploadMbps,
 		r.LatencyIdleMs, r.LatencyLoadedMs,
 		r.DownloadJitterMs, r.UploadJitterMs,
 		r.PacketLoss, r.BufferbloatGrade,
-		r.ClientIP, r.UserAgent, r.SettingsJSON,
+		r.ClientIP, r.ClientIPLocation, r.UserAgent, r.SettingsJSON,
 	)
 	if err != nil {
 		return Result{}, fmt.Errorf("store: save: %w", err)
@@ -118,7 +170,7 @@ SELECT id, created_at, download_mbps, upload_mbps,
        latency_idle_ms, latency_loaded_ms,
        download_jitter_ms, upload_jitter_ms,
        packet_loss, bufferbloat_grade,
-       client_ip, user_agent, settings_json
+       client_ip, client_ip_location, user_agent, settings_json
 FROM results
 ORDER BY created_at DESC, id DESC
 LIMIT ? OFFSET ?
@@ -193,7 +245,7 @@ func scanRows(rows *sql.Rows) ([]Result, error) {
 			&r.LatencyIdleMs, &r.LatencyLoadedMs,
 			&r.DownloadJitterMs, &r.UploadJitterMs,
 			&r.PacketLoss, &r.BufferbloatGrade,
-			&r.ClientIP, &r.UserAgent, &r.SettingsJSON,
+			&r.ClientIP, &r.ClientIPLocation, &r.UserAgent, &r.SettingsJSON,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan: %w", err)
 		}

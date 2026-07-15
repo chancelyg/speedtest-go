@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"speedtest-go/internal/config"
+	"speedtest-go/internal/geoip"
 	"speedtest-go/internal/handler"
 	"speedtest-go/internal/store"
 )
@@ -114,7 +115,67 @@ func main() {
 		}
 	}
 
-	srv := newServerWithStore(cfg, historyStore)
+	// Optional IP-geolocation lookup — same fail-open pattern as history:
+	// an unreadable / non-mmdb path logs a warning and the server keeps
+	// running with the feature off. Empty cfg.GeoIPDBPath (the default)
+	// means the operator didn't opt in; we don't even attempt to open a
+	// file, so a zero-config deploy never touches any third-party data.
+	var geoLookup geoip.Lookup
+	if cfg.GeoIPDBPath != "" {
+		lu, err := geoip.Open(cfg.GeoIPDBPath)
+		if err != nil {
+			slog.Warn("geoip disabled", "db_path", cfg.GeoIPDBPath, "err", err.Error())
+		} else {
+			geoLookup = lu
+			slog.Info("geoip enabled", "db_path", cfg.GeoIPDBPath)
+		}
+	}
+
+	srv, h := newServerWithStore(cfg, historyStore, geoLookup)
+
+	// Optional auto-download: if the operator supplied a MaxMind license
+	// key, launch a background updater that (a) downloads the .mmdb bundle
+	// immediately if we don't already have one, and (b) refreshes it
+	// weekly and hot-swaps h.GeoIP. Zero-config deploys (no key) skip this
+	// entirely — no HTTP call is ever made to MaxMind.
+	updaterCtx, cancelUpdater := context.WithCancel(context.Background())
+	defer cancelUpdater() // belt-and-suspenders; the signal handler cancels too
+	if cfg.GeoIPLicenseKey != "" {
+		targetPath := cfg.GeoIPDBPath
+		if targetPath == "" {
+			// No explicit path but a key was set: default to a sensible
+			// filename in the working directory (mirrors DBPath's
+			// "./speedtest.db" default). The updater writes here and
+			// the same file gets picked up on the next restart.
+			targetPath = "./" + cfg.GeoIPEdition + ".mmdb"
+		}
+		u, uerr := geoip.NewUpdater(geoip.UpdaterConfig{
+			LicenseKey: cfg.GeoIPLicenseKey,
+			Edition:    cfg.GeoIPEdition,
+			TargetPath: targetPath,
+			Log: func(level, msg string, kv ...any) {
+				switch level {
+				case "warn":
+					slog.Warn(msg, kv...)
+				default:
+					slog.Info(msg, kv...)
+				}
+			},
+		})
+		if uerr != nil {
+			slog.Warn("geoip auto-update disabled", "err", uerr.Error())
+		} else {
+			u.OnSwap(func(lu geoip.Lookup) {
+				// SetGeoIP is safe under concurrent createResult reads and
+				// closes the previous handle on swap. First swap here is
+				// what makes the feature actually go live when the initial
+				// geoLookup (from static path) was nil.
+				h.SetGeoIP(lu)
+			})
+			go u.Run(updaterCtx)
+			slog.Info("geoip auto-update enabled", "edition", cfg.GeoIPEdition, "target", targetPath)
+		}
+	}
 
 	// Graceful shutdown: wait for SIGINT or SIGTERM, then drain in-flight
 	// connections with a 30-second deadline so ongoing speed-test streams
@@ -127,6 +188,9 @@ func main() {
 		signal.Notify(sigch, os.Interrupt, syscall.SIGTERM)
 		<-sigch
 		slog.Info("shutting down, draining connections", "timeout", "30s")
+		// Stop the background updater first so its goroutine can't race
+		// a Close() below.
+		cancelUpdater()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
@@ -136,6 +200,16 @@ func main() {
 			if err := historyStore.Close(); err != nil {
 				slog.Error("store close error", "err", err.Error())
 			}
+		}
+		// Close whatever geoip handle is currently live — this may be the
+		// initial static-mmdb reader OR the most recent auto-download
+		// swap. SetGeoIP already closed all earlier swap victims.
+		// CloseGeoIP flags the handler as closed so an updater tick that
+		// finishes AFTER this (its ctx cancellation isn't preemptive
+		// inside extract/verify) will close its own new lookup instead
+		// of storing it into a handler nobody's watching.
+		if err := h.CloseGeoIP(); err != nil {
+			slog.Error("geoip close error", "err", err.Error())
 		}
 		close(idleConnsClosed)
 	}()
@@ -161,7 +235,8 @@ func main() {
 //     response side (time-mode downloads stream for up to 5 minutes).
 //   - IdleTimeout reaps keep-alive connections between requests.
 func newServer(cfg *config.Config) *http.Server {
-	return newServerWithStore(cfg, nil)
+	srv, _ := newServerWithStore(cfg, nil, nil)
+	return srv
 }
 
 // idleTimeout returns a keep-alive idle timeout long enough that a maximum-
@@ -178,9 +253,16 @@ func idleTimeout(testDuration time.Duration) time.Duration {
 }
 
 // newServerWithStore is the full constructor used by main(). Tests that need
-// the history endpoints wired in pass a non-nil store.
-func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
-	mux, h := buildMux(cfg, s)
+// the history endpoints wired in pass a non-nil store; those that also
+// want geoip enrichment pass a non-nil geoip.Lookup. Both are optional —
+// nil means the corresponding feature is off, matching main.go's
+// fail-open behaviour when the operator hasn't configured the flag.
+//
+// Returns the built http.Server plus the Handler pointer so main() can
+// wire up the auto-download OnSwap callback (which needs to call
+// h.SetGeoIP each time the mmdb refreshes).
+func newServerWithStore(cfg *config.Config, s store.Store, g geoip.Lookup) (*http.Server, *handler.Handler) {
+	mux, h := buildMux(cfg, s, g)
 
 	// === [P4-B: rate-limit middleware wrap] ===
 	// Per-IP rate limiting wraps the mux. When cfg.RatePerMin <= 0 the
@@ -201,16 +283,21 @@ func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
 		// the same keep-alive connection, so we add a 60 s safety margin.
 		// A flat 120 s here would silently close mid-test on long runs.
 		IdleTimeout: idleTimeout(cfg.Duration),
-	}
+	}, h
 }
 
-func buildMux(cfg *config.Config, s store.Store) (*http.ServeMux, *handler.Handler) {
+func buildMux(cfg *config.Config, s store.Store, g geoip.Lookup) (*http.ServeMux, *handler.Handler) {
 	h := handler.New(cfg, s)
 	// Wire the ldflag-injected build metadata into the handler so /api/config
 	// and /healthz can surface it. Local `go run` leaves the defaults ("dev"
 	// / "none" / "unknown") which are legal — versionOrDev() maps "dev" to
 	// the same sentinel for consistency across endpoints.
 	h.Build = handler.BuildInfo{Version: version, Commit: commit, Date: date}
+	// Nil-safe: main.go passes nil when SPEEDTEST_GEOIP_DB is empty or the
+	// mmdb file failed to open. Handler treats nil as "feature disabled".
+	// Assignment goes through SetGeoIP so the internal RWMutex is honoured
+	// — the auto-download loop later Set()s the refreshed reader too.
+	h.SetGeoIP(g)
 	mux := http.NewServeMux()
 
 	// Static assets embedded in the binary.

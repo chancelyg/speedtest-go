@@ -376,6 +376,9 @@ func TestLoadWithSources_AllCLIFlags(t *testing.T) {
 		"--warmup-ms", "1000",
 		"--db-path", "/tmp/foo.db",
 		"--rate-per-min", "60",
+		"--geoip-db", "/tmp/geo.mmdb",
+		"--geoip-license-key", "abcXYZ",
+		"--geoip-edition", "GeoLite2-Country",
 	}
 	cfg, _, err := config.LoadWithSources(args, mockEnv(nil))
 	if err != nil {
@@ -397,6 +400,9 @@ func TestLoadWithSources_AllCLIFlags(t *testing.T) {
 		{"WarmupMs", cfg.WarmupMs, 1000},
 		{"DBPath", cfg.DBPath, "/tmp/foo.db"},
 		{"RatePerMin", cfg.RatePerMin, 60},
+		{"GeoIPDBPath", cfg.GeoIPDBPath, "/tmp/geo.mmdb"},
+		{"GeoIPLicenseKey", cfg.GeoIPLicenseKey, "abcXYZ"},
+		{"GeoIPEdition", cfg.GeoIPEdition, "GeoLite2-Country"},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -418,7 +424,10 @@ func TestLoadWithSources_FileFullSchema(t *testing.T) {
 		"warmup_ms": 250,
 		"db_path": "/var/lib/speedtest.db",
 		"history_retention_days": 7,
-		"rate_per_min": 120
+		"rate_per_min": 120,
+		"geoip_db_path": "/var/lib/geo.mmdb",
+		"geoip_license_key": "fromJSON",
+		"geoip_edition": "GeoLite2-Country"
 	}`)
 	cfg, _, err := config.LoadWithSources(nil, mockEnv(map[string]string{
 		"SPEEDTEST_CONFIG": path,
@@ -440,6 +449,35 @@ func TestLoadWithSources_FileFullSchema(t *testing.T) {
 	}
 	if cfg.DBPath != "/var/lib/speedtest.db" || cfg.HistoryRetentionDays != 7 {
 		t.Errorf("history wrong: db=%q ret=%d", cfg.DBPath, cfg.HistoryRetentionDays)
+	}
+	if cfg.GeoIPDBPath != "/var/lib/geo.mmdb" {
+		t.Errorf("GeoIPDBPath = %q, want /var/lib/geo.mmdb", cfg.GeoIPDBPath)
+	}
+}
+
+func TestLoadWithSources_GeoIPEnvOverride(t *testing.T) {
+	cfg, _, err := config.LoadWithSources(nil, mockEnv(map[string]string{
+		"SPEEDTEST_GEOIP_DB": "/etc/geoip.mmdb",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cfg.GeoIPDBPath != "/etc/geoip.mmdb" {
+		t.Errorf("GeoIPDBPath = %q, want /etc/geoip.mmdb", cfg.GeoIPDBPath)
+	}
+}
+
+func TestLoadWithSources_GeoIPDisabledByDefault(t *testing.T) {
+	// The whole point of the opt-in design: no env, no CLI, no file → the
+	// feature is off, no mmdb file is ever touched. This test guards
+	// against a future change to defaults() that would accidentally set a
+	// non-empty path and silently start requiring an external data file.
+	cfg, _, err := config.LoadWithSources(nil, mockEnv(nil))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cfg.GeoIPDBPath != "" {
+		t.Errorf("GeoIPDBPath = %q, want empty (feature disabled)", cfg.GeoIPDBPath)
 	}
 }
 
