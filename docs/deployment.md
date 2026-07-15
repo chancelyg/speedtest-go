@@ -51,11 +51,25 @@ Environment="SPEEDTEST_PORT=8080"
 Environment="SPEEDTEST_MODE=time"
 Environment="SPEEDTEST_DURATION=15"
 Environment="SPEEDTEST_STREAMS=4"
+# 全局并发上限（默认 10）；单机内网够用，公网/物理机可调大
+# Environment="SPEEDTEST_MAX_CONCURRENT=32"
+# History 持久化路径（默认 ./speedtest.db；空串关闭持久化）
+Environment="SPEEDTEST_DB_PATH=/var/lib/speedtest/speedtest.db"
+# Environment="SPEEDTEST_HISTORY_RETENTION_DAYS=90"
 # 公网部署可启用每 IP 限流（默认 0 = 关闭）
 # Environment="SPEEDTEST_RATE_PER_MIN=60"
+# 可选：IP 归属地
+# —— 方式 A：本地 mmdb（自己维护）
+# Environment="SPEEDTEST_GEOIP_DB=/var/lib/speedtest/GeoLite2-City.mmdb"
+# —— 方式 B：MaxMind license key 自动下载 + 每周刷新
+# Environment="SPEEDTEST_GEOIP_LICENSE_KEY=xxxxxxxxxxxxxxxx"
+# Environment="SPEEDTEST_GEOIP_EDITION=GeoLite2-City"
 
 # 资源限制
 LimitNOFILE=65535
+
+# 允许写 /var/lib/speedtest（SQLite + 可选 mmdb 落地）
+ReadWritePaths=/var/lib/speedtest
 
 [Install]
 WantedBy=multi-user.target
@@ -67,10 +81,10 @@ WantedBy=multi-user.target
 # 创建用户
 sudo useradd -r -s /bin/false speedtest
 
-# 创建目录
-sudo mkdir -p /opt/speedtest
+# 创建目录（二进制 + 状态目录）
+sudo mkdir -p /opt/speedtest /var/lib/speedtest
 sudo cp speedtest /opt/speedtest/
-sudo chown -R speedtest:speedtest /opt/speedtest
+sudo chown -R speedtest:speedtest /opt/speedtest /var/lib/speedtest
 
 # 启动服务
 sudo systemctl daemon-reload
@@ -101,15 +115,22 @@ ENTRYPOINT ["/speedtest"]
 # 构建镜像
 docker build -t speedtest-go .
 
-# 运行容器
+# 运行容器（含 History 持久化 + 可选 geoip 自动下载）
 docker run -d \
   --name speedtest \
   -p 8080:8080 \
+  -v /var/lib/speedtest:/var/lib/speedtest \
   -e SPEEDTEST_PORT=8080 \
   -e SPEEDTEST_MODE=time \
   -e SPEEDTEST_DURATION=15 \
+  -e SPEEDTEST_DB_PATH=/var/lib/speedtest/speedtest.db \
+  # -e SPEEDTEST_GEOIP_LICENSE_KEY=xxxx \  # 可选：自动下 mmdb
+  # -e SPEEDTEST_GEOIP_DB=/var/lib/speedtest/GeoLite2-City.mmdb \
   speedtest-go
 ```
+
+也可以直接用 GHCR 上的官方多架构镜像:`ghcr.io/chancelyg/speedtest-go:latest`
+(或 `:v0.5.0` 锁死版本)。
 
 #### 使用 docker-compose
 
@@ -120,23 +141,40 @@ version: '3.8'
 
 services:
   speedtest:
-    image: speedtest-go:latest
+    image: ghcr.io/chancelyg/speedtest-go:latest
     container_name: speedtest
     restart: unless-stopped
     ports:
       - "8080:8080"
+    volumes:
+      # 持久化 SQLite history + (可选) mmdb 缓存
+      - /var/lib/speedtest:/var/lib/speedtest
     environment:
       - SPEEDTEST_HOST=0.0.0.0
       - SPEEDTEST_PORT=8080
       - SPEEDTEST_MODE=time
       - SPEEDTEST_DURATION=15
       - SPEEDTEST_STREAMS=4
+      # - SPEEDTEST_MAX_CONCURRENT=32
+      - SPEEDTEST_DB_PATH=/var/lib/speedtest/speedtest.db
+      # - SPEEDTEST_HISTORY_RETENTION_DAYS=90
+      # - SPEEDTEST_RATE_PER_MIN=60
+      # 可选：IP 归属地（自己维护 mmdb）
+      # - SPEEDTEST_GEOIP_DB=/var/lib/speedtest/GeoLite2-City.mmdb
+      # 可选：让 speedtest 自动下 mmdb + 每周刷新
+      # - SPEEDTEST_GEOIP_LICENSE_KEY=xxxxxxxxxxxxxxxx
+      # - SPEEDTEST_GEOIP_EDITION=GeoLite2-City
     deploy:
       resources:
         limits:
           memory: 128M
         reservations:
           memory: 32M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
 ```
 
 运行：
@@ -292,11 +330,31 @@ docker logs -f speedtest
 ### 健康检查
 
 ```bash
-# 检查服务是否运行
-curl -f http://localhost:8080/api/ping || echo "Service down"
+# 生产健康检查（推荐 —— 顺便返回版本 / uptime / 累计计数）
+curl -sf http://localhost:8080/healthz | jq
+# {
+#   "status": "ok",
+#   "uptime_sec": 3600,
+#   "active_tests": 0,
+#   "accepted_total": 1024,
+#   "rejected_total": 8,
+#   "history_enabled": true,
+#   "version": "0.5.0",
+#   ...
+# }
 
-# 检查配置
-curl http://localhost:8080/api/config | jq
+# 极简 liveness（不需要 JSON 解析）
+curl -sf http://localhost:8080/api/ping || echo "Service down"
+
+# 前端引导配置（含 geoipEnabled / maxConcurrent 等）
+curl -sf http://localhost:8080/api/config | jq
+```
+
+Prometheus 抓取(如已启用):
+
+```bash
+# 内网抓即可(公网建议按上面 Caddy 那节屏蔽 /metrics)
+curl -sf http://localhost:8080/metrics | grep speedtest_
 ```
 
 ## 性能优化
