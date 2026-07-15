@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-15
+
+### Added
+
+- **Opt-in IP geolocation column in History**. When the operator sets
+  `SPEEDTEST_GEOIP_DB` (or `--geoip-db`) to a local MaxMind- or
+  DB-IP-format `.mmdb` file, every stored result gets a `client_ip_location`
+  ("城市, 国家" / "City, Country") snapshot taken at write time from the
+  peer IP. Zh-CN name is preferred with English fallback. `/api/config`
+  reports `geoipEnabled: true` and the frontend renders a new column
+  between IP and Download. Zero-config deploys (no flag) skip the feature
+  entirely — no third-party data is ever read.
+- **Auto-download of the mmdb**. When `SPEEDTEST_GEOIP_LICENSE_KEY` is
+  set, a background updater fetches the bundle from MaxMind on first
+  run (target path defaults to `./<edition>.mmdb`), extracts and verifies
+  it, then hot-swaps the in-process reader. A weekly `If-Modified-Since`
+  refresh keeps it current. Startup is not blocked — first-run tests get
+  no location string, subsequent tests do. Failures (bad key, network
+  down, corrupt archive) log a warning and preserve the previous on-disk
+  copy; the main service never crashes. `SPEEDTEST_GEOIP_EDITION`
+  (default `GeoLite2-City`) selects the MaxMind product to download.
+- New Go module dependency: `github.com/oschwald/maxminddb-golang` (pure
+  Go, ISC-licensed, ~200 KB). Optional at runtime — unused when no geoip
+  flag is set. `CGO_ENABLED=0` builds continue to work.
+- Migration `0002_geoip_column.sql` adds the `client_ip_location TEXT`
+  column. Applied idempotently via a new `ensureColumn` helper that
+  checks `PRAGMA table_info` first, so re-running against an already-
+  migrated DB is a no-op (SQLite has no `ADD COLUMN IF NOT EXISTS`).
+
+### Changed
+
+- `Handler.GeoIP` moved from an exported field to `SetGeoIP` /
+  `LocateIP` / `CloseGeoIP` methods backed by an internal
+  `sync.RWMutex`. Reads (LocateIP) hold the RLock across the underlying
+  `maxminddb.Reader.Lookup` call and Close/hot-swap runs inside the
+  write lock — this is load-bearing because maxminddb-golang uses mmap
+  and a Close that unmaps the buffer concurrently with an in-flight
+  Lookup would crash the process with SIGBUS. `CloseGeoIP` also flags
+  the handler as shutting-down so a late-arriving OnSwap from the
+  updater goroutine closes its input instead of storing (and later
+  leaking) it.
+
 ## [0.4.0] - 2026-07-14
 
 ### Added
