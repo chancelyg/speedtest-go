@@ -46,6 +46,19 @@ const maxUploadBytes = 10 << 30
 // client from requesting unbounded downloads.
 const maxBytesPerStream = 1 << 30 // 1 GB
 
+// BuildInfo carries the ldflag-injected build metadata (semver, commit SHA,
+// build date) originally defined as package-level vars in main. Bundling
+// them here lets the handler surface them on /api/config and /healthz
+// without importing main or reaching into a global. Zero-value BuildInfo
+// (Version="", Commit="", Date="") is legal and means "unknown" — the JSON
+// responses fall back to a "dev" sentinel so the frontend can render
+// consistently regardless of build provenance.
+type BuildInfo struct {
+	Version string
+	Commit  string
+	Date    string
+}
+
 // Handler holds the server configuration and exposes HTTP handler methods.
 type Handler struct {
 	cfg *config.Config
@@ -57,6 +70,12 @@ type Handler struct {
 	// dependency optional lets the server run in stateless mode without a
 	// writable filesystem.
 	store store.Store
+
+	// Build is the ldflag-injected release metadata surfaced by /api/config
+	// and /healthz. Exported and settable so main.go can populate it after
+	// New() without a signature bump touching every test caller. Tests that
+	// don't care leave the zero value, which JSON-renders as "dev".
+	Build BuildInfo
 
 	// startedAt is captured at New() time so /healthz can report uptime.
 	startedAt time.Time
@@ -133,6 +152,37 @@ func (h *Handler) release() { <-h.sem }
 // Exposed to /api/config so the frontend can hide history UI when off.
 func (h *Handler) historyEnabled() bool { return h.store != nil }
 
+// versionOrDev returns h.Build.Version, or "dev" when unset (zero-value
+// BuildInfo, or `go run` which never populates the ldflag). Keeping the
+// sentinel in one place means /api/config and /healthz agree on what the
+// UI / ops tooling sees for local builds.
+func (h *Handler) versionOrDev() string {
+	if h.Build.Version == "" {
+		return "dev"
+	}
+	return h.Build.Version
+}
+
+// commitOrEmpty filters main.go's "none" ldflag default (and empty) to "".
+// Without this the JSON payload sends the literal string "none", which is
+// truthy in JavaScript so the frontend tooltip for a dev build ends up
+// reading "none · unknown" instead of being suppressed.
+func (h *Handler) commitOrEmpty() string {
+	if h.Build.Commit == "" || h.Build.Commit == "none" {
+		return ""
+	}
+	return h.Build.Commit
+}
+
+// dateOrEmpty is the counterpart for main.go's "unknown" date default.
+// Same rationale as commitOrEmpty.
+func (h *Handler) dateOrEmpty() string {
+	if h.Build.Date == "" || h.Build.Date == "unknown" {
+		return ""
+	}
+	return h.Build.Date
+}
+
 // ── /api/config ───────────────────────────────────────────────────────────
 
 type configResponse struct {
@@ -154,6 +204,14 @@ type configResponse struct {
 	WarmupMs       int  `json:"warmupMs"`
 	HistoryEnabled bool `json:"historyEnabled"`
 	MaxConcurrent  int  `json:"maxConcurrent"`
+	// Build metadata (ldflag-injected via main). Version is "dev" for local
+	// `go run` builds. Commit / Date may be empty when the build wasn't
+	// produced by goreleaser — the frontend degrades gracefully (omits the
+	// tooltip on the version badge). Grouped here so a single /api/config
+	// roundtrip lights up the footer version display.
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
 }
 
 // ConfigHandler exposes the server-side test configuration so the frontend
@@ -176,6 +234,9 @@ func (h *Handler) ConfigHandler(w http.ResponseWriter, r *http.Request) {
 		// the raw cfg field here would report 0 for callers that used the
 		// zero-value config in tests.
 		MaxConcurrent:  cap(h.sem),
+		Version:        h.versionOrDev(),
+		Commit:         h.commitOrEmpty(),
+		Date:           h.dateOrEmpty(),
 	})
 }
 

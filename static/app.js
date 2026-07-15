@@ -97,8 +97,10 @@ let lang = (() => {
 let testing = false;
 
 // Server config (loaded once from /api/config). maxConcurrent mirrors the
-// server-side semaphore capacity and is what the streams selector clamps to.
-let srvCfg = { mode: 'time', durationSecs: 15, downloadMB: 25, uploadMB: 10, streams: 4, maxConcurrent: 10 };
+// server-side semaphore capacity and is what the streams selector clamps to;
+// version/commit/date carry the ldflag-injected build metadata surfaced in
+// the footer version badge. "dev" is the sentinel for unversioned builds.
+let srvCfg = { mode: 'time', durationSecs: 15, downloadMB: 25, uploadMB: 10, streams: 4, maxConcurrent: 10, version: 'dev', commit: '', date: '' };
 
 // Active config: localStorage > server config > defaults
 let activeCfg = { ...srvCfg };
@@ -237,6 +239,30 @@ function applyStreamsCap(cap) {
     activeCfg.streams = Number(sel.value) || activeCfg.streams;
     saveLocalConfig(activeCfg);
   }
+}
+
+// Render the version badge in the footer from the /api/config payload.
+// The version string is rendered verbatim for the "dev" sentinel and
+// prefixed with "v" for a real semver so a release build reads "v0.3.0"
+// while local `go run` reads "dev". Commit + date go into the title
+// attribute so hovering surfaces the exact build without cluttering the
+// footer line.
+//
+// @param {{version?: string, commit?: string, date?: string}} build
+function renderFooterVersion(build) {
+  const el = $('footer-version');
+  if (!el) return;
+  const raw = typeof build?.version === 'string' && build.version.trim() !== ''
+    ? build.version.trim()
+    : 'dev';
+  // Semver → "v0.3.0"; sentinel / branch names → verbatim.
+  const label = /^\d/.test(raw) ? `v${raw}` : raw;
+  el.textContent = label;
+  const parts = [];
+  if (typeof build?.commit === 'string' && build.commit) parts.push(build.commit.slice(0, 12));
+  if (typeof build?.date === 'string' && build.date)     parts.push(build.date);
+  if (parts.length > 0) el.title = parts.join(' · ');
+  else                  el.removeAttribute('title');
 }
 
 // Set the streams-select to the option whose value is closest to (but not
@@ -1153,6 +1179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initConfigUI();
   applyConfigToUI(activeCfg);
   applyStreamsCap(srvCfg?.maxConcurrent);
+  renderFooterVersion(srvCfg);
 
   // Load client IP
   try {

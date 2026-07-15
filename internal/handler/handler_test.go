@@ -126,6 +126,65 @@ func TestConfigHandlerReportsMaxConcurrent(t *testing.T) {
 	}
 }
 
+func TestConfigHandlerReportsBuildMetadata(t *testing.T) {
+	h := handler.New(sizeCfg(25, 10), nil)
+	h.Build = handler.BuildInfo{Version: "1.2.3", Commit: "abc1234", Date: "2026-07-14"}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	h.ConfigHandler(w, req)
+
+	var body map[string]any
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if body["version"] != "1.2.3" {
+		t.Errorf("version = %v, want 1.2.3", body["version"])
+	}
+	if body["commit"] != "abc1234" {
+		t.Errorf("commit = %v, want abc1234", body["commit"])
+	}
+	if body["date"] != "2026-07-14" {
+		t.Errorf("date = %v, want 2026-07-14", body["date"])
+	}
+}
+
+func TestConfigHandlerVersionFallsBackToDev(t *testing.T) {
+	// Same zero-value fallback contract as /healthz — the frontend footer
+	// depends on receiving *some* string every time.
+	h := handler.New(sizeCfg(25, 10), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	h.ConfigHandler(w, req)
+
+	var body map[string]any
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if body["version"] != "dev" {
+		t.Errorf("version = %v, want dev (fallback)", body["version"])
+	}
+}
+
+func TestConfigHandlerFiltersMainDefaultSentinels(t *testing.T) {
+	// main.go's ldflag defaults are "none" / "unknown"; those strings must
+	// NOT leak into JSON because the frontend truthy-check would render
+	// them as a tooltip ("none · unknown" for a dev build). The handler
+	// helpers coerce them to empty strings.
+	h := handler.New(sizeCfg(25, 10), nil)
+	h.Build = handler.BuildInfo{Version: "dev", Commit: "none", Date: "unknown"}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	w := httptest.NewRecorder()
+	h.ConfigHandler(w, req)
+
+	var body map[string]any
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if body["commit"] != "" {
+		t.Errorf(`commit = %q, want "" (sentinel filtered)`, body["commit"])
+	}
+	if body["date"] != "" {
+		t.Errorf(`date = %q, want "" (sentinel filtered)`, body["date"])
+	}
+}
+
 func TestConfigHandlerMaxConcurrentFallback(t *testing.T) {
 	// sizeCfg leaves MaxConcurrent at 0; Handler.New coerces the semaphore
 	// capacity to 10. /api/config must report the effective value, not 0,

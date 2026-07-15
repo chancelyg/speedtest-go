@@ -18,7 +18,14 @@
  *     history list are always fresh regardless of the shell cache.
  */
 
-const CACHE_NAME = 'speedtest-v1';
+// CACHE_NAME is rewritten at serve time by the Go binary (see swjsHandler
+// in main.go) to `speedtest-<build-version>`. That means every release
+// automatically invalidates the prior shell cache without anyone having to
+// remember to bump this string — the manual-bump discipline the earlier
+// comment relied on was silently skipped across v0.1.0 → v0.2.0 → v0.3.0,
+// leaving returning PWA users on a stale shell forever. The token here is
+// preserved verbatim in the embedded copy; production builds never see it.
+const CACHE_NAME = '__SPEEDTEST_CACHE_NAME__';
 
 const STATIC_ASSETS = [
   '/',

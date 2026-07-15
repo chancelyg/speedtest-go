@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -205,6 +206,11 @@ func newServerWithStore(cfg *config.Config, s store.Store) *http.Server {
 
 func buildMux(cfg *config.Config, s store.Store) (*http.ServeMux, *handler.Handler) {
 	h := handler.New(cfg, s)
+	// Wire the ldflag-injected build metadata into the handler so /api/config
+	// and /healthz can surface it. Local `go run` leaves the defaults ("dev"
+	// / "none" / "unknown") which are legal — versionOrDev() maps "dev" to
+	// the same sentinel for consistency across endpoints.
+	h.Build = handler.BuildInfo{Version: version, Commit: commit, Date: date}
 	mux := http.NewServeMux()
 
 	// Static assets embedded in the binary.
@@ -218,6 +224,12 @@ func buildMux(cfg *config.Config, s store.Store) (*http.ServeMux, *handler.Handl
 	// favicon.ico: prefer a custom file placed next to the binary at runtime;
 	// fall back to the default icon embedded in static/favicon.ico.
 	mux.HandleFunc("/favicon.ico", faviconHandler(sub))
+
+	// sw.js is served through a version-injecting handler so CACHE_NAME
+	// changes on every release without anyone having to remember to bump a
+	// constant in the source. The token substitution happens once at boot;
+	// per-request cost is a single map lookup + write.
+	mux.HandleFunc("/sw.js", swjsHandler(sub, version))
 
 	// API — speed test endpoints.
 	mux.HandleFunc("/api/config", h.ConfigHandler)
@@ -241,6 +253,37 @@ func buildMux(cfg *config.Config, s store.Store) (*http.ServeMux, *handler.Handl
 	mux.HandleFunc("/api/results", h.ResultsListOrCreate)
 
 	return mux, h
+}
+
+// swjsCachePlaceholder is the token that static/sw.js contains verbatim in
+// its CACHE_NAME assignment; swjsHandler replaces it with the running
+// build's cache-name string so PWA installs on the previous release get
+// invalidated automatically on the first fetch after upgrade.
+const swjsCachePlaceholder = "__SPEEDTEST_CACHE_NAME__"
+
+// swjsHandler reads the embedded sw.js once at boot, substitutes the
+// CACHE_NAME placeholder with `speedtest-<version>`, and serves the result.
+// Doing the substitution at boot rather than per-request keeps the hot path
+// a single Write call and means an unparseable embed would surface at
+// startup rather than deep inside a request.
+func swjsHandler(embedded fs.FS, version string) http.HandlerFunc {
+	raw, err := fs.ReadFile(embedded, "sw.js")
+	if err != nil {
+		// Broken embed means the binary is misassembled; surface it clearly
+		// per-request rather than crashing the whole server on startup.
+		slog.Error("sw.js: read embedded", "err", err.Error())
+		return func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "sw.js unavailable", http.StatusInternalServerError)
+		}
+	}
+	body := bytes.ReplaceAll(raw, []byte(swjsCachePlaceholder), []byte("speedtest-"+version))
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		// Browsers do byte-for-byte SW comparison on the update check;
+		// no-cache keeps intermediary proxies from serving a stale copy.
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(body)
+	}
 }
 
 // faviconHandler returns a handler that serves ./favicon.ico from the working

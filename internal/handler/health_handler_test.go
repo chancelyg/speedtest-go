@@ -77,3 +77,61 @@ func TestHealthHandlerNoCachingHeaders(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want no-store", cc)
 	}
 }
+
+func TestHealthHandlerReportsBuildMetadata(t *testing.T) {
+	h := handler.New(healthCfg(), nil)
+	h.Build = handler.BuildInfo{Version: "1.2.3", Commit: "abc1234", Date: "2026-07-14"}
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	h.HealthHandler(w, req)
+
+	var body map[string]any
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if body["version"] != "1.2.3" {
+		t.Errorf("version = %v, want 1.2.3", body["version"])
+	}
+	if body["commit"] != "abc1234" {
+		t.Errorf("commit = %v, want abc1234", body["commit"])
+	}
+	if body["date"] != "2026-07-14" {
+		t.Errorf("date = %v, want 2026-07-14", body["date"])
+	}
+}
+
+func TestHealthHandlerVersionFallsBackToDev(t *testing.T) {
+	// Zero-value BuildInfo — the case for `go run` builds and any test that
+	// doesn't populate it. The endpoint must surface a "dev" sentinel so the
+	// frontend footer can render consistently rather than showing "v" alone.
+	h := handler.New(healthCfg(), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	h.HealthHandler(w, req)
+
+	var body map[string]any
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if body["version"] != "dev" {
+		t.Errorf("version = %v, want dev (fallback)", body["version"])
+	}
+}
+
+func TestHealthHandlerFiltersMainDefaultSentinels(t *testing.T) {
+	// Mirror of the /api/config filter test — "none" / "unknown" from
+	// main.go's ldflag defaults must not surface in the JSON payload.
+	h := handler.New(healthCfg(), nil)
+	h.Build = handler.BuildInfo{Version: "dev", Commit: "none", Date: "unknown"}
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	h.HealthHandler(w, req)
+
+	var body map[string]any
+	json.NewDecoder(w.Result().Body).Decode(&body)
+	if body["commit"] != "" {
+		t.Errorf(`commit = %q, want "" (sentinel filtered)`, body["commit"])
+	}
+	if body["date"] != "" {
+		t.Errorf(`date = %q, want "" (sentinel filtered)`, body["date"])
+	}
+}

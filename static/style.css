@@ -637,6 +637,26 @@ body {
 
 .footer p { margin: 0; }
 
+/* Version badge lives on its own line so applyLang() writing to #footer-text
+   can't wipe it (a textContent assignment on the parent <p> would collapse
+   all children into a single text node and delete the version span). */
+.footer-version-line {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+/* Version text itself — tabular digits so 0.10.0 doesn't jitter next to
+   v0.9.0 when a new release ships. cursor:help is scoped to elements that
+   actually carry a title attribute (unversioned builds have no tooltip). */
+.footer-version {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.footer-version[title] {
+  cursor: help;
+}
+
 /* ── Animations ────────────────────────────────────────────────────── */
 
 @keyframes fadeUp {
